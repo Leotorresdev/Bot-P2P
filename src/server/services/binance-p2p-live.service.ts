@@ -96,11 +96,11 @@ async function fetchBinanceSide(
     const payload = {
       asset: "USDT",
       fiat: "VES",
-      merchantCheck: false,
+      merchantCheck: true,
       page: 1,
       payTypes: [payType],
-      publisherType: null,
-      rows: 5,
+      publisherType: "merchant", // Filtra estrictamente solo comerciantes verificados
+      rows: 10,
       tradeType,
       transAmount: String(amount),
     };
@@ -128,8 +128,16 @@ async function fetchBinanceSide(
       return null;
     }
 
-    // Tomamos rigurosamente el 2do anuncio (índice 1). Si solo hay 1, usamos el primero como fallback
-    const targetAd = json.data[1] ?? json.data[0];
+    // Filtramos rigurosamente para garantizar que únicamente sean comerciantes verificados
+    const verifiedAds = json.data.filter(
+      (item) =>
+        item.advertiser.userType === "merchant" ||
+        item.advertiser.userType === "pro_merchant"
+    );
+    const candidateAds = verifiedAds.length > 0 ? verifiedAds : json.data;
+
+    // Tomamos rigurosamente el 2do anuncio (índice 1) de comerciantes verificados. Si solo hay 1, usamos el primero como fallback
+    const targetAd = candidateAds[1] ?? candidateAds[0];
     if (!targetAd) return null;
 
     const parsedPrice = parseFloat(targetAd.adv.price);

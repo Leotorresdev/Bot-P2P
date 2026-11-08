@@ -11,7 +11,7 @@
 El sistema resuelve tres grandes problemas del ecosistema cripto-fiat venezolano:
 1. **Control de Márgenes y Ganancia Libre**: Cruza automáticamente cada venta contra el inventario de compra por lote (FIFO / Costo Promedio WAC), deduciendo comisiones de Binance y separando la ganancia neta.
 2. **Cumplimiento Tributario SENIAT (Norma BA VEN-NIF)**: En Venezuela, el capital rotado en compra de criptoactivos es **exento de IVA** (costo de adquisición). La provisión impositiva del **16%** se aplica de forma estricta **únicamente sobre el margen bruto comercial realizado**, evitando que los comerciantes paguen impuestos sobre su propio capital.
-3. **Monitoreo de Brechas Bancarias en Vivo**: Conexión directa a la API de Binance C2C para comparar en vivo el 2do anuncio de compra y el 2do anuncio de venta según el monto en Bolívares para **Banesco, Pago Móvil, Mercantil, BBVA Provincial, Banco de Venezuela, Bancamiga y BNC**.
+3. **Monitoreo de Brechas Bancarias en Vivo**: Conexión directa a la API de Binance C2C para comparar en vivo el 2do anuncio de compra y el 2do anuncio de venta **exclusivamente de comerciantes verificados (`publisherType: 'merchant'`)** según el monto en Bolívares para **Banesco, Pago Móvil, Mercantil, BBVA Provincial, Banco de Venezuela, Bancamiga y BNC**.
 
 ---
 

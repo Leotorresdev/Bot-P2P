@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Esquema SQL Oficial — Bot P2P Venezuela (Supabase PostgreSQL)
 -- Copia y ejecuta este script en el "SQL Editor" de tu proyecto Supabase:
--- https://supabase.com/dashboard/project/knwgldaoewqljjcnsjrs/sql
+-- https://supabase.com/dashboard/project/knwgldaoewqljjcnsjrs/sql/new
 -- =========================================================================
 
 -- 1. Tabla de Operadores (Usuarios del Bot)
@@ -65,13 +65,50 @@ CREATE TABLE IF NOT EXISTS public.daily_closings (
   UNIQUE (user_id, closing_iso_date)
 );
 
--- Habilitar políticas para el MVP
+-- 5. Permisos y Políticas de Acceso
 ALTER TABLE public.p2p_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.api_credentials ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.p2p_orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.daily_closings ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Allow Backend MVP Access Users" ON public.p2p_users FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow Backend MVP Access Credentials" ON public.api_credentials FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow Backend MVP Access Orders" ON public.p2p_orders FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow Backend MVP Access Closings" ON public.daily_closings FOR ALL USING (true) WITH CHECK (true);
+-- Políticas permisivas para la API Backend
+DROP POLICY IF EXISTS "Allow Backend MVP Access Users" ON public.p2p_users;
+CREATE POLICY "Allow Backend MVP Access Users" ON public.p2p_users FOR ALL TO public USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow Backend MVP Access Credentials" ON public.api_credentials;
+CREATE POLICY "Allow Backend MVP Access Credentials" ON public.api_credentials FOR ALL TO public USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow Backend MVP Access Orders" ON public.p2p_orders;
+CREATE POLICY "Allow Backend MVP Access Orders" ON public.p2p_orders FOR ALL TO public USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow Backend MVP Access Closings" ON public.daily_closings;
+CREATE POLICY "Allow Backend MVP Access Closings" ON public.daily_closings FOR ALL TO public USING (true) WITH CHECK (true);
+
+GRANT ALL ON TABLE public.p2p_users TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.api_credentials TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.p2p_orders TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.daily_closings TO anon, authenticated, service_role;
+
+-- 6. Insertar tu cuenta registrada para que puedas iniciar sesión de inmediato
+INSERT INTO public.p2p_users (
+  id,
+  email,
+  full_name,
+  password_hash,
+  password_salt,
+  totp_secret,
+  role,
+  created_at
+) VALUES (
+  'usr_d4e833cc-84c',
+  'leofersontp0912@gmail.com',
+  'leoferson torres',
+  '31c26b97f3e5a6fa583db4bd9708d0048b4a50df651d3aae1c4fdbcf356c438345357a663916ea1f29fbf367d39d193a8daa62d2fac492aba60302ba002d29cc',
+  'a9a48a69e269e9f2c31039079f5e66b3',
+  'LV2X56HYBEHVIWNI',
+  'OPERATOR',
+  NOW()
+) ON CONFLICT (email) DO UPDATE SET
+  password_hash = EXCLUDED.password_hash,
+  password_salt = EXCLUDED.password_salt,
+  totp_secret = EXCLUDED.totp_secret;

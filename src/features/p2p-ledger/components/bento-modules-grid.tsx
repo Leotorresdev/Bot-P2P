@@ -382,11 +382,11 @@ export function BentoModulesGrid({
                   </h2>
                   <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[10px] font-extrabold text-emerald-700">
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    2do Anuncio Binance P2P
+                    Solo Comerciantes Verificados (2do Anuncio)
                   </span>
                 </div>
                 <p className="text-xs font-medium text-slate-500">
-                  Brecha real entre el 2do anuncio de compra y el 2do anuncio de venta según el monto.
+                  Brecha real entre el 2do anuncio de compra y el 2do anuncio de venta de comerciantes verificados según el monto.
                 </p>
               </div>
             </div>

@@ -84,7 +84,8 @@ npm run dev
 ```
 
 Abre tu navegador en:
-👉 **[http://localhost:3000](http://localhost:3000)**
+👉 En producción (Vercel): **[https://bot-p2-p.vercel.app](https://bot-p2-p.vercel.app)**
+👉 En entorno local: **[http://localhost:3000](http://localhost:3000)**
 
 ---
 
