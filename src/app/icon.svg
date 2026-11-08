@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="finGrad" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#10B981"/>
+      <stop offset="50%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#047857"/>
+    </linearGradient>
+    <linearGradient id="finArrow" x1="14" y1="34" x2="50" y2="14" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FEF08A"/>
+      <stop offset="100%" stop-color="#FACC15"/>
+    </linearGradient>
+    <filter id="finShadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#022c22" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- Fondo Bóveda / Finanzas (Squircle Suave) -->
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#finGrad)"/>
+  <rect x="2" y="2" width="60" height="60" rx="16" stroke="#6EE7B7" stroke-width="1.5" stroke-opacity="0.4"/>
+
+  <!-- Barras Contables / Crecimiento Financiero -->
+  <rect x="15" y="36" width="7" height="14" rx="2.5" fill="#FFFFFF" fill-opacity="0.5"/>
+  <rect x="25" y="28" width="7" height="22" rx="2.5" fill="#FFFFFF" fill-opacity="0.75"/>
+  <rect x="35" y="20" width="7" height="30" rx="2.5" fill="#FFFFFF" fill-opacity="0.95"/>
+
+  <!-- Curva y Flecha de Ganancia / Brecha Positiva (Dorado Brillante) -->
+  <path d="M14 33 L25 24 L35 27 L48 14" stroke="url(#finArrow)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#finShadow)"/>
+  <path d="M40 14 H48 V22" stroke="url(#finArrow)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#finShadow)"/>
+
+  <!-- Destello Financiero -->
+  <circle cx="48" cy="14" r="2" fill="#FFFFFF"/>
+</svg>

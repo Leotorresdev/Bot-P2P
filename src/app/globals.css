@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 150 11% 97%;
+    --foreground: 165 35% 7%;
+  }
+
+  * {
+    font-family: var(--font-jakarta), -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+  }
+
+  body {
+    background-color: #F6F8F7;
+    color: #0B1714;
+    font-family: var(--font-jakarta), -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.015em;
+  }
+}

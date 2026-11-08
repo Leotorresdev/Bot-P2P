@@ -1,0 +1,232 @@
+// Prisma ORM Schema — LedgerP2P Venezuela (Supabase PostgreSQL + Better Auth + Binance C2C Accounting)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ==========================================
+// 1. BETTER AUTH + RBAC (Operador vs Contador SENIAT)
+// ==========================================
+
+enum UserRole {
+  OPERATOR       // Dueño / Operador P2P (Acceso total a Bóveda API y Dashboard)
+  AUDITOR_SENIAT // Contador Público CPC (Acceso exclusivo a Libros 16% y Actas 11:59 PM)
+}
+
+model User {
+  id               String           @id @default(cuid())
+  name             String
+  email            String           @unique
+  emailVerified    Boolean          @default(false)
+  image            String?
+  role             UserRole         @default(OPERATOR)
+  twoFactorEnabled Boolean          @default(true)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  sessions         Session[]
+  accounts         Account[]
+  twoFactors       TwoFactor[]
+  apiCredentials   ApiCredential[]
+  p2pOrders        P2POrder[]
+  inventoryLots    InventoryLot[]
+  dailyClosings    DailyClosing[]
+  auditLogs        AuditLog[]
+
+  @@index([role])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?   // Argon2id Hash gestionado por Better Auth
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String    @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime? @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+model TwoFactor {
+  id          String @id @default(cuid())
+  secret      String
+  backupCodes String
+  userId      String
+  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("twoFactor")
+}
+
+// ==========================================
+// 2. BÓVEDA API DE BINANCE (CIFRADO AES-256-GCM)
+// ==========================================
+
+model ApiCredential {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label               String   @default("Binance P2P Principal")
+  apiKeyMasked        String   // Ej: vmPUZE6m********89xQ
+  apiKeyEncrypted     String   // AES-256-GCM Ciphertext
+  apiSecretEncrypted  String   // AES-256-GCM Ciphertext (Jamás sale del servidor)
+  iv                  String   // Initialization Vector (Hex)
+  authTag             String   // GCM Authentication Tag (Hex)
+  isReadOnlyVerified  Boolean  @default(true) // Validado contra /sapi/v1/account/apiRestrictions
+  withdrawalsBlocked  Boolean  @default(true)
+  spotTradingBlocked  Boolean  @default(true)
+  lastSyncAt          DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@map("api_credential")
+}
+
+// ==========================================
+// 3. ÓRDENES P2P Y LOTES CONTABLES (FIFO / WAC + 16% SENIAT)
+// ==========================================
+
+enum TradeType {
+  BUY
+  SELL
+}
+
+enum AdRole {
+  MAKER
+  TAKER
+}
+
+model P2POrder {
+  orderNumber         String    @id // ID único de Binance C2C (Evita duplicados)
+  advNo               String
+  userId              String
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tradeType           TradeType
+  advertisementRole   AdRole    @default(MAKER)
+  asset               String    @default("USDT")
+  fiat                String    @default("VES")
+  payMethodName       String    // Banesco, Pago Móvil, Mercantil, BBVA
+  counterPartNickName String
+  amountUsdt          Decimal   @db.Decimal(20, 8) // Monto bruto en USDT
+  commissionUsdt      Decimal   @db.Decimal(20, 8) // Comisión cobrada por Binance en USDT
+  unitPriceVes        Decimal   @db.Decimal(20, 8) // Tasa de la operación (Bs/USDT)
+  totalPriceVes       Decimal   @db.Decimal(20, 8) // Monto total en Bolívares (VES)
+  costBasisRateVes    Decimal   @db.Decimal(20, 8) // Tasa base del lote (Bs/USDT)
+  exemptCapitalVes    Decimal   @db.Decimal(20, 8) // Capital rotado exento de impuesto (Bs)
+  grossProfitVes      Decimal   @db.Decimal(20, 8) // Utilidad bruta antes de impuesto (Bs)
+  seniatTax16Ves      Decimal   @db.Decimal(20, 8) // Provisión 16% SENIAT sobre la ganancia (Bs)
+  seniatTax16Usdt     Decimal   @db.Decimal(20, 8) // Equivalente en USDT del 16% SENIAT
+  netFreeProfitVes    Decimal   @db.Decimal(20, 8) // Ganancia Neta Libre en Bs (después del 16%)
+  netFreeProfitUsdt   Decimal   @db.Decimal(20, 8) // Ganancia Neta Libre en USDT
+  marginPercent       Decimal   @db.Decimal(10, 4) // Porcentaje de margen neto (+1.66%)
+  orderStatus         String    @default("COMPLETED")
+  createTime          DateTime  // Hora exacta de la orden en Binance
+
+  @@index([userId, createTime])
+  @@index([payMethodName])
+  @@map("p2p_order")
+}
+
+model InventoryLot {
+  id                  String   @id @default(cuid())
+  lotCode             String   // Ej: LOTE #14
+  sourceOrderNumber   String   @unique
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payMethodName       String
+  initialUsdt         Decimal  @db.Decimal(20, 8)
+  remainingUsdt       Decimal  @db.Decimal(20, 8)
+  unitCostVes         Decimal  @db.Decimal(20, 8) // Costo real incluyendo comisión de compra
+  isExhausted         Boolean  @default(false)
+  createdAt           DateTime @default(now())
+
+  @@index([userId, isExhausted, createdAt])
+  @@map("inventory_lot")
+}
+
+// ==========================================
+// 4. ACTAS DE CIERRE DIARIO AUTOMÁTICO (11:59 PM VET)
+// ==========================================
+
+model DailyClosing {
+  id                  String   @id @default(cuid())
+  closingDate         String   // Formato YYYY-MM-DD (Hora Venezuela UTC-4)
+  executedAtVet       String   @default("23:59:00 VET")
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reconciledOrders    Int
+  totalVolumeUsdt     Decimal  @db.Decimal(20, 8)
+  exemptCapitalVes    Decimal  @db.Decimal(20, 8)
+  grossProfitUsdt     Decimal  @db.Decimal(20, 8)
+  grossProfitVes      Decimal  @db.Decimal(20, 8)
+  seniatTax16Usdt     Decimal  @db.Decimal(20, 8)
+  seniatTax16Ves      Decimal  @db.Decimal(20, 8)
+  netFreeProfitUsdt   Decimal  @db.Decimal(20, 8)
+  netFreeProfitVes    Decimal  @db.Decimal(20, 8)
+  averageSpreadPct    Decimal  @db.Decimal(10, 4)
+  closingWacRateVes   Decimal  @db.Decimal(20, 8)
+  integrityHashSha256 String   // Firma criptográfica de inmutabilidad del acta
+  createdAt           DateTime @default(now())
+
+  @@unique([userId, closingDate])
+  @@index([userId, createdAt])
+  @@map("daily_closing")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  event     String   // Ej: "[23:59:00 VET] Acta #310 firmada con SHA-256"
+  ipAddress String   @default("190.202.xx.xx (Caracas, VE)")
+  level     String   @default("INFO")
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("audit_log")
+}
