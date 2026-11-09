@@ -34,7 +34,7 @@ interface CachedBrechasEntry {
   data: readonly BankLiveMonitorDto[];
 }
 
-const BRECHAS_CACHE = new Map<number, CachedBrechasEntry>();
+const BRECHAS_CACHE = new Map<string, CachedBrechasEntry>();
 const CACHE_TTL_MS = 8_000; // 8 segundos de caché para optimizar velocidad y evitar rate-limits
 
 const BANK_CONFIG: readonly {
@@ -169,10 +169,11 @@ export class BinanceP2PLiveService {
    * para calibrar el libro contable de operaciones y las tasas de cambio.
    */
   public static async getLiveMarketBenchmark(
-    amount: number = 5000
+    buyAmount: number = 100_000,
+    sellAmount: number = 100_000
   ): Promise<LiveBenchmarkRates> {
     try {
-      const brechas = await this.getLiveBrechas(amount);
+      const brechas = await this.getLiveBrechas(buyAmount, sellAmount);
       const banesco =
         brechas.find((b) => b.bankName === "Banesco") ?? brechas[0];
       if (!banesco) {
@@ -203,29 +204,33 @@ export class BinanceP2PLiveService {
 
   /**
    * Obtiene la brecha real entre el 2do anuncio de compra y el 2do anuncio de venta
-   * para los 4 bancos nacionales venezolanos, filtrado por el monto en bolívares.
+   * para los bancos nacionales venezolanos, filtrado independientemente por los montos
+   * cotizados en bolívares para compra y para venta (desde 50 Bs. hasta 50.000.000 Bs.).
    */
   public static async getLiveBrechas(
-    amount: number = 5000
+    buyAmount: number = 100_000,
+    sellAmount: number = 100_000
   ): Promise<readonly BankLiveMonitorDto[]> {
-    const cleanAmount = Math.max(50, Math.min(amount, 10_000_000));
+    const cleanBuyAmount = Math.max(50, Math.min(buyAmount, 50_000_000));
+    const cleanSellAmount = Math.max(50, Math.min(sellAmount, 50_000_000));
+    const cacheKey = `${cleanBuyAmount}_${cleanSellAmount}`;
     const now = Date.now();
 
     // 1. Revisar caché en memoria
-    const cached = BRECHAS_CACHE.get(cleanAmount);
+    const cached = BRECHAS_CACHE.get(cacheKey);
     if (cached && now - cached.timestamp < CACHE_TTL_MS) {
       return cached.data;
     }
 
-    // 2. Consulta concurrente para los 4 bancos
+    // 2. Consulta concurrente para los bancos
     const results = await Promise.all(
       BANK_CONFIG.map(async (config) => {
         // En Binance C2C search:
-        // 'BUY' = anuncios donde usuarios compran USDT (merchants venden USDT a usuarios)
-        // 'SELL' = anuncios donde usuarios venden USDT (merchants compran USDT a usuarios)
+        // 'BUY' = anuncios donde usuarios compran USDT (merchants venden USDT) => cotizado con sellAmount
+        // 'SELL' = anuncios donde usuarios venden USDT (merchants compran USDT) => cotizado con buyAmount
         const [sellAdSide, buyAdSide] = await Promise.all([
-          fetchBinanceSide("BUY", config.payType, cleanAmount),
-          fetchBinanceSide("SELL", config.payType, cleanAmount),
+          fetchBinanceSide("BUY", config.payType, cleanSellAmount),
+          fetchBinanceSide("SELL", config.payType, cleanBuyAmount),
         ]);
 
         let buyRate2ndNum = buyAdSide?.price;
@@ -236,9 +241,9 @@ export class BinanceP2PLiveService {
 
         // Fallback seguro si la conexión a Binance fallase temporalmente
         if (!buyRate2ndNum || !sellRate2ndNum) {
-          const baseRate = 1020.0 + (cleanAmount > 20000 ? 5.0 : 0);
+          const baseRate = 1040.0 + (cleanBuyAmount > 100000 ? 5.0 : 0);
           buyRate2ndNum = baseRate;
-          sellRate2ndNum = baseRate + (config.bankName === "Pago Móvil" ? 9.5 : 6.8);
+          sellRate2ndNum = baseRate + (config.bankName === "Pago Móvil" ? 6.5 : 4.8);
           merchantBuy = "P2P_Merchant_Buy";
           merchantSell = "P2P_Merchant_Sell";
           isLive = false;
@@ -252,7 +257,9 @@ export class BinanceP2PLiveService {
 
         return {
           bankName: config.bankName,
-          filterAmountVes: cleanAmount,
+          filterAmountVes: cleanBuyAmount,
+          buyFilterAmountVes: cleanBuyAmount,
+          sellFilterAmountVes: cleanSellAmount,
           buyRate2nd: buyRate2ndNum.toFixed(2),
           sellRate2nd: sellRate2ndNum.toFixed(2),
           brechaPointsVes: (brechaPoints >= 0 ? "+" : "") + brechaPoints.toFixed(2),
@@ -268,7 +275,7 @@ export class BinanceP2PLiveService {
     );
 
     // Guardar en caché
-    BRECHAS_CACHE.set(cleanAmount, {
+    BRECHAS_CACHE.set(cacheKey, {
       timestamp: now,
       data: results,
     });

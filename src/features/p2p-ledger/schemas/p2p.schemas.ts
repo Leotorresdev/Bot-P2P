@@ -39,7 +39,9 @@ export const GetSummaryQuerySchema = z.object({
 });
 
 export const GetBanksQuerySchema = z.object({
-  amount: z.coerce.number().min(50).max(10_000_000).default(5000),
+  amount: z.coerce.number().min(50).max(50_000_000).default(100_000).optional(),
+  buyAmount: z.coerce.number().min(50).max(50_000_000).default(100_000).optional(),
+  sellAmount: z.coerce.number().min(50).max(50_000_000).default(100_000).optional(),
 });
 export type GetBanksQueryInput = z.infer<typeof GetBanksQuerySchema>;
 
@@ -182,6 +184,8 @@ export interface PnlSummaryDto {
 export interface BankLiveMonitorDto {
   readonly bankName: VenezuelanBank;
   readonly filterAmountVes: number;
+  readonly buyFilterAmountVes: number;
+  readonly sellFilterAmountVes: number;
   readonly buyRate2nd: string;
   readonly sellRate2nd: string;
   readonly brechaPointsVes: string;

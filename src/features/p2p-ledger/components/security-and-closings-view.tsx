@@ -23,6 +23,7 @@ import {
 import {
   useDailyClosingsQuery,
   useSaveBinanceVaultMutation,
+  useTestBinanceMutation,
 } from "@/features/p2p-ledger/api/use-p2p-queries";
 import {
   SaveBinanceVaultBodySchema,
@@ -38,8 +39,11 @@ export function SecurityAndClosingsView() {
   const saveVaultMutation = useSaveBinanceVaultMutation();
 
   const [showUpdateForm, setShowUpdateForm] = React.useState(false);
-  const [testingConnection, setTestingConnection] = React.useState(false);
-  const [connectionTestedOk, setConnectionTestedOk] = React.useState(false);
+  const testMutation = useTestBinanceMutation();
+  const [testResult, setTestResult] = React.useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
   const [expandedClosingId, setExpandedClosingId] = React.useState<
     string | null
   >(null);
@@ -59,18 +63,27 @@ export function SecurityAndClosingsView() {
       onSuccess: () => {
         setShowUpdateForm(false);
         form.reset();
+        setTestResult(null);
       },
     });
   };
 
   const handleTestConnection = () => {
-    setTestingConnection(true);
-    setConnectionTestedOk(false);
-    setTimeout(() => {
-      setTestingConnection(false);
-      setConnectionTestedOk(true);
-      setTimeout(() => setConnectionTestedOk(false), 3000);
-    }, 700);
+    setTestResult(null);
+    testMutation.mutate(undefined, {
+      onSuccess: (res) => {
+        setTestResult({
+          success: true,
+          message: res.message,
+        });
+      },
+      onError: (err) => {
+        setTestResult({
+          success: false,
+          message: err.message,
+        });
+      },
+    });
   };
 
   const closingsData = closingsQuery.data;
@@ -140,36 +153,45 @@ export function SecurityAndClosingsView() {
                     <button
                       type="button"
                       onClick={handleTestConnection}
-                      disabled={testingConnection}
+                      disabled={testMutation.isPending}
                       className={cn(
-                        "inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-all",
-                        connectionTestedOk
+                        "inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-all cursor-pointer",
+                        testResult?.success
                           ? "border-emerald-300 bg-emerald-100 text-emerald-800"
+                          : testResult?.success === false
+                          ? "border-rose-300 bg-rose-50 text-rose-800"
                           : "border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:bg-emerald-50"
                       )}
                     >
-                      {connectionTestedOk ? (
-                        <>
-                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                          <span>¡Conexión Perfecta!</span>
-                        </>
-                      ) : (
-                        <>
-                          <RefreshCw
-                            className={cn(
-                              "h-3.5 w-3.5 text-emerald-600",
-                              testingConnection && "animate-spin"
-                            )}
-                          />
-                          <span>
-                            {testingConnection
-                              ? "Probando..."
-                              : "Probar Conexión"}
-                          </span>
-                        </>
-                      )}
+                      <RefreshCw
+                        className={cn(
+                          "h-3.5 w-3.5",
+                          testResult?.success ? "text-emerald-600" : testResult?.success === false ? "text-rose-600" : "text-emerald-600",
+                          testMutation.isPending && "animate-spin"
+                        )}
+                      />
+                      <span>
+                        {testMutation.isPending
+                          ? "Comprobando en Binance..."
+                          : testResult?.success
+                          ? "¡Conexión Perfecta!"
+                          : "Probar Conexión Real"}
+                      </span>
                     </button>
                   </div>
+
+                  {testResult && (
+                    <div
+                      className={cn(
+                        "rounded-lg p-2.5 text-xs font-semibold leading-relaxed border",
+                        testResult.success
+                          ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+                          : "bg-rose-50 border-rose-200 text-rose-900"
+                      )}
+                    >
+                      {testResult.message}
+                    </div>
+                  )}
 
                   <div className="flex items-center justify-between border-t border-slate-200/70 pt-2.5 text-xs">
                     <span className="font-medium text-slate-500">
@@ -386,7 +408,9 @@ export function SecurityAndClosingsView() {
                   </div>
                   <div className="flex flex-col">
                     <span className="text-sm font-extrabold text-slate-900">
-                      Leoferson (Dueño Principal)
+                      {closingsData?.userName
+                        ? `${closingsData.userName} (Dueño Principal)`
+                        : "Dueño Principal"}
                     </span>
                     <span className="text-xs font-medium text-slate-500">
                       Control total de ganancias, bancos y claves de Binance
@@ -413,7 +437,7 @@ export function SecurityAndClosingsView() {
                   </div>
                   <div className="flex flex-col">
                     <span className="text-sm font-extrabold text-slate-900">
-                      Lic. Roberto Méndez (Tu Contador)
+                      Contador
                     </span>
                     <span className="text-xs font-medium text-slate-500">
                       Solo puede ver cierres diarios y descargar el Excel del

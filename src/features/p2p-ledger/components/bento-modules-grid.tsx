@@ -128,11 +128,13 @@ export function BentoModulesGrid({
   onSelectBank,
 }: BentoModulesGridProps) {
   const { setActiveTab } = useLedgerUiStore();
-  const [brechaAmount, setBrechaAmount] = React.useState<number>(5000);
-  const [tempAmountInput, setTempAmountInput] = React.useState<string>("5000");
+  const [buyBrechaAmount, setBuyBrechaAmount] = React.useState<number>(100_000);
+  const [sellBrechaAmount, setSellBrechaAmount] = React.useState<number>(100_000);
+  const [tempBuyInput, setTempBuyInput] = React.useState<string>("100000");
+  const [tempSellInput, setTempSellInput] = React.useState<string>("100000");
 
   const summaryQuery = useP2PSummaryQuery(period, method);
-  const banksQuery = useVenezuelanBanksQuery(brechaAmount);
+  const banksQuery = useVenezuelanBanksQuery(buyBrechaAmount, sellBrechaAmount);
 
   const [primaryCurrency, setPrimaryCurrency] = React.useState<"USDT" | "VES">(
     "USDT"
@@ -409,74 +411,173 @@ export function BentoModulesGrid({
             )}
           </div>
 
-          {/* Selector de Monto para cotizar la Brecha */}
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/80 p-3">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <span className="text-xs font-bold text-slate-700">
-                Monto a cotizar:
-              </span>
-              <div className="relative flex items-center">
-                <input
-                  type="number"
-                  min={50}
-                  max={10000000}
-                  value={tempAmountInput}
-                  onChange={(e) => setTempAmountInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      const num = parseFloat(tempAmountInput);
-                      if (!isNaN(num) && num > 0) setBrechaAmount(num);
-                    }
-                  }}
-                  onBlur={() => {
-                    const num = parseFloat(tempAmountInput);
-                    if (!isNaN(num) && num > 0) setBrechaAmount(num);
-                  }}
-                  className="w-28 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-extrabold text-slate-900 focus:border-indigo-500 focus:outline-none"
-                />
-                <span className="ml-1.5 text-xs font-bold text-slate-500">Bs.</span>
+          {/* Selector de Montos Independientes para Compra y Venta */}
+          <div className="flex flex-col gap-3 rounded-2xl border border-slate-200/90 bg-slate-50/70 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/60 pb-2.5">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-slate-800">
+                  Cotización de Brecha por Volumen:
+                </span>
+                <span className="text-[11px] font-medium text-slate-500 hidden sm:inline">
+                  (Montos altos en Bolívares para Comerciantes Verificados)
+                </span>
               </div>
 
-              {parseFloat(tempAmountInput) !== brechaAmount && (
+              {(parseFloat(tempBuyInput) !== buyBrechaAmount ||
+                parseFloat(tempSellInput) !== sellBrechaAmount) && (
                 <button
                   type="button"
                   onClick={() => {
-                    const num = parseFloat(tempAmountInput);
-                    if (!isNaN(num) && num > 0) setBrechaAmount(num);
+                    const bNum = parseFloat(tempBuyInput);
+                    const sNum = parseFloat(tempSellInput);
+                    if (!isNaN(bNum) && bNum >= 50) setBuyBrechaAmount(bNum);
+                    if (!isNaN(sNum) && sNum >= 50) setSellBrechaAmount(sNum);
                   }}
-                  className="rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-bold text-white shadow-sm hover:bg-indigo-500"
+                  className="rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-extrabold text-white shadow-sm transition-all hover:bg-emerald-500"
                 >
-                  Consultar
+                  Actualizar Brechas
                 </button>
               )}
             </div>
 
-            {/* Chips Rápidos de Montos Habituales */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] font-semibold text-slate-400 mr-1 hidden sm:inline">
-                Montos rápidos:
-              </span>
-              {[1000, 5000, 10000, 25000, 50000].map((preset) => {
-                const isActive = brechaAmount === preset;
-                return (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => {
-                      setBrechaAmount(preset);
-                      setTempAmountInput(String(preset));
-                    }}
-                    className={cn(
-                      "rounded-lg px-2.5 py-1 text-[11px] font-bold transition-all",
-                      isActive
-                        ? "bg-slate-900 text-white shadow-sm"
-                        : "border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900"
-                    )}
-                  >
-                    {preset.toLocaleString("es-VE")} Bs.
-                  </button>
-                );
-              })}
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {/* LADO COMPRA (Anuncios de Compra del Comerciante) */}
+              <div className="flex flex-col gap-2 rounded-xl border border-emerald-200 bg-white p-3 shadow-xs">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                    1. Monto Anuncio de Compra:
+                  </label>
+                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
+                    Tu Pago en Bs.
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="relative flex flex-1 items-center">
+                    <input
+                      type="number"
+                      min={50}
+                      max={50000000}
+                      value={tempBuyInput}
+                      onChange={(e) => setTempBuyInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          const num = parseFloat(tempBuyInput);
+                          if (!isNaN(num) && num >= 50) setBuyBrechaAmount(num);
+                        }
+                      }}
+                      onBlur={() => {
+                        const num = parseFloat(tempBuyInput);
+                        if (!isNaN(num) && num >= 50) setBuyBrechaAmount(num);
+                      }}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-extrabold text-slate-900 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                    />
+                    <span className="absolute right-3 text-xs font-bold text-slate-400">
+                      Bs.
+                    </span>
+                  </div>
+                </div>
+
+                {/* Chips de Montos Altos para Compra */}
+                <div className="flex flex-wrap items-center gap-1 pt-1">
+                  {[50000, 100000, 200000, 300000, 500000, 1000000].map(
+                    (preset) => {
+                      const isActive = buyBrechaAmount === preset;
+                      return (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => {
+                            setBuyBrechaAmount(preset);
+                            setTempBuyInput(String(preset));
+                          }}
+                          className={cn(
+                            "rounded-md px-2 py-0.5 text-[10px] font-bold transition-all",
+                            isActive
+                              ? "bg-emerald-700 text-white shadow-xs"
+                              : "border border-slate-200 bg-slate-50 text-slate-600 hover:border-emerald-300 hover:bg-emerald-50/50"
+                          )}
+                        >
+                          {preset >= 1000000
+                            ? `${preset / 1000000}M Bs.`
+                            : `${preset / 1000}k Bs.`}
+                        </button>
+                      );
+                    }
+                  )}
+                </div>
+              </div>
+
+              {/* LADO VENTA (Anuncios de Venta del Comerciante) */}
+              <div className="flex flex-col gap-2 rounded-xl border border-rose-200 bg-white p-3 shadow-xs">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-rose-900 flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-rose-500" />
+                    2. Monto Anuncio de Venta:
+                  </label>
+                  <span className="text-[10px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md">
+                    Tu Cobro en Bs.
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="relative flex flex-1 items-center">
+                    <input
+                      type="number"
+                      min={50}
+                      max={50000000}
+                      value={tempSellInput}
+                      onChange={(e) => setTempSellInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          const num = parseFloat(tempSellInput);
+                          if (!isNaN(num) && num >= 50)
+                            setSellBrechaAmount(num);
+                        }
+                      }}
+                      onBlur={() => {
+                        const num = parseFloat(tempSellInput);
+                        if (!isNaN(num) && num >= 50)
+                            setSellBrechaAmount(num);
+                      }}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-extrabold text-slate-900 focus:border-rose-500 focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                    />
+                    <span className="absolute right-3 text-xs font-bold text-slate-400">
+                      Bs.
+                    </span>
+                  </div>
+                </div>
+
+                {/* Chips de Montos Altos para Venta */}
+                <div className="flex flex-wrap items-center gap-1 pt-1">
+                  {[50000, 100000, 200000, 300000, 500000, 1000000].map(
+                    (preset) => {
+                      const isActive = sellBrechaAmount === preset;
+                      return (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => {
+                            setSellBrechaAmount(preset);
+                            setTempSellInput(String(preset));
+                          }}
+                          className={cn(
+                            "rounded-md px-2 py-0.5 text-[10px] font-bold transition-all",
+                            isActive
+                              ? "bg-rose-700 text-white shadow-xs"
+                              : "border border-slate-200 bg-slate-50 text-slate-600 hover:border-rose-300 hover:bg-rose-50/50"
+                          )}
+                        >
+                          {preset >= 1000000
+                            ? `${preset / 1000000}M Bs.`
+                            : `${preset / 1000}k Bs.`}
+                        </button>
+                      );
+                    }
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -555,46 +656,57 @@ export function BentoModulesGrid({
                   </div>
 
                   {/* Fila 3: Detalle de los 2dos Anuncios Compra y Venta */}
-                  <div className="flex flex-col gap-1 rounded-lg border border-black/5 bg-white/70 p-2 text-[11px]">
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-500 font-medium">
-                        Compra (2do):
-                      </span>
-                      <span className="font-bold text-slate-900">
-                        {bank.buyRate2nd ?? bank.liveRateVes} Bs.
-                      </span>
+                  <div className="flex flex-col gap-1.5 rounded-lg border border-black/5 bg-white/70 p-2 text-[11px]">
+                    <div className="flex flex-col gap-0.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-emerald-700 font-extrabold flex items-center gap-1">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                          Compra (2do):
+                        </span>
+                        <span className="font-extrabold text-slate-900">
+                          {bank.buyRate2nd ?? bank.liveRateVes} Bs.
+                        </span>
+                      </div>
+                      {bank.merchantBuyNick && (
+                        <span className="text-[10px] text-slate-400 truncate pl-2.5">
+                          por {bank.merchantBuyNick}
+                        </span>
+                      )}
                     </div>
-                    {bank.merchantBuyNick && (
-                      <span className="text-[10px] text-slate-400 truncate">
-                        por {bank.merchantBuyNick}
-                      </span>
-                    )}
 
-                    <div className="flex items-center justify-between pt-1 border-t border-black/5">
-                      <span className="text-slate-500 font-medium">
-                        Venta (2do):
-                      </span>
-                      <span className="font-bold text-slate-900">
-                        {bank.sellRate2nd ?? bank.liveRateVes} Bs.
-                      </span>
+                    <div className="flex flex-col gap-0.5 pt-1 border-t border-black/5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-rose-700 font-extrabold flex items-center gap-1">
+                          <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+                          Venta (2do):
+                        </span>
+                        <span className="font-extrabold text-slate-900">
+                          {bank.sellRate2nd ?? bank.liveRateVes} Bs.
+                        </span>
+                      </div>
+                      {bank.merchantSellNick && (
+                        <span className="text-[10px] text-slate-400 truncate pl-2.5">
+                          por {bank.merchantSellNick}
+                        </span>
+                      )}
                     </div>
-                    {bank.merchantSellNick && (
-                      <span className="text-[10px] text-slate-400 truncate">
-                        por {bank.merchantSellNick}
-                      </span>
-                    )}
                   </div>
 
                   {/* Fila 4: Footer */}
                   <div className="flex items-center justify-between border-t border-black/5 pt-1.5 text-[10px] font-semibold text-slate-500">
-                    <span>
-                      Monto:{" "}
-                      {bank.filterAmountVes?.toLocaleString("es-VE") ??
-                        brechaAmount}{" "}
+                    <span className="truncate">
+                      C:{" "}
+                      {(
+                        bank.buyFilterAmountVes ?? buyBrechaAmount
+                      ).toLocaleString("es-VE")}{" "}
+                      | V:{" "}
+                      {(
+                        bank.sellFilterAmountVes ?? sellBrechaAmount
+                      ).toLocaleString("es-VE")}{" "}
                       Bs.
                     </span>
-                    <span className="group-hover:text-slate-900 font-bold">
-                      {isSelected ? "Filtro activo ✓" : "Filtrar operaciones →"}
+                    <span className="group-hover:text-slate-900 font-bold shrink-0">
+                      {isSelected ? "Filtro activo ✓" : "Filtrar →"}
                     </span>
                   </div>
                 </button>

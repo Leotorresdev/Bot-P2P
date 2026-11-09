@@ -15,7 +15,8 @@ export const p2pQueryKeys = {
   all: ["p2p-ledger"] as const,
   summary: (period: PeriodFilter, method: LotMethod) =>
     [...p2pQueryKeys.all, "summary", { period, method }] as const,
-  banks: (amount?: number) => [...p2pQueryKeys.all, "banks", { amount }] as const,
+  banks: (buyAmount?: number, sellAmount?: number) =>
+    [...p2pQueryKeys.all, "banks", { buyAmount, sellAmount }] as const,
   orders: (filters: {
     period: PeriodFilter;
     tradeType: TradeTypeFilter;
@@ -42,13 +43,17 @@ export function useP2PSummaryQuery(period: PeriodFilter, method: LotMethod) {
   });
 }
 
-export function useVenezuelanBanksQuery(amount: number = 5000) {
+export function useVenezuelanBanksQuery(
+  buyAmount: number = 100_000,
+  sellAmount: number = 100_000
+) {
   return useQuery({
-    queryKey: p2pQueryKeys.banks(amount),
+    queryKey: p2pQueryKeys.banks(buyAmount, sellAmount),
     queryFn: async () => {
       const res = await apiClient.api.p2p.banks.$get({
         query: {
-          amount: String(amount),
+          buyAmount: String(buyAmount),
+          sellAmount: String(sellAmount),
         },
       });
       if (!res.ok) {
@@ -84,6 +89,50 @@ export function useP2POrdersQuery(params: {
       }
       const json = await res.json();
       return json.data;
+    },
+    refetchInterval: 15_000, // Sincronización continua de órdenes
+  });
+}
+
+export function useSyncBinanceMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await apiClient.api.p2p["sync-binance"].$post();
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(
+          (json as { error?: string }).error ??
+            "Error al sincronizar con Binance."
+        );
+      }
+      return json as { message: string; data: { count: number } };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
+    },
+  });
+}
+
+export function useTestBinanceMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await apiClient.api.p2p["test-binance"].$post();
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(
+          (json as { error?: string }).error ??
+            "Binance rechazó la prueba de conexión."
+        );
+      }
+      return json as {
+        message: string;
+        data: { success: boolean; message: string; orderCount?: number };
+      };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
     },
   });
 }

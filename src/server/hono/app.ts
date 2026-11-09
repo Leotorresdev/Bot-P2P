@@ -373,6 +373,12 @@ export const routes = baseApp
     if (!user) {
       return c.json({ error: "No autenticado" }, 401);
     }
+    if (!user.name) {
+      const userRecord = await SupabaseVaultRepository.findUserById(user.id);
+      if (userRecord?.fullName) {
+        return c.json({ data: { ...user, name: userRecord.fullName } }, 200);
+      }
+    }
     return c.json({ data: user }, 200);
   })
   .get(
@@ -396,11 +402,45 @@ export const routes = baseApp
     "/p2p/banks",
     zValidator("query", GetBanksQuerySchema),
     async (c) => {
-      const { amount } = c.req.valid("query");
-      const banks = await BinanceP2PLiveService.getLiveBrechas(amount);
+      const { amount, buyAmount, sellAmount } = c.req.valid("query");
+      const effectiveBuyAmount = buyAmount ?? amount ?? 100_000;
+      const effectiveSellAmount = sellAmount ?? amount ?? 100_000;
+      const banks = await BinanceP2PLiveService.getLiveBrechas(
+        effectiveBuyAmount,
+        effectiveSellAmount
+      );
       return c.json({ data: banks }, 200);
     }
   )
+  .post("/p2p/sync-binance", async (c) => {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
+    }
+
+    const orders = await P2PAccountingService.getUserOrdersFromVaultOrBinance(
+      user.id
+    );
+    return c.json(
+      {
+        message: `Sincronización completada. Se encontraron ${orders.length} órdenes conciliadas.`,
+        data: { count: orders.length },
+      },
+      200
+    );
+  })
+  .post("/p2p/test-binance", async (c) => {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
+    }
+
+    const result = await P2PAccountingService.testBinanceConnection(user.id);
+    if (!result.success) {
+      return c.json({ error: result.message, data: result }, 400);
+    }
+    return c.json({ message: result.message, data: result }, 200);
+  })
   .get(
     "/p2p/orders",
     zValidator("query", GetOrdersQuerySchema),
@@ -425,8 +465,21 @@ export const routes = baseApp
     if (!user) {
       return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
     }
+    let userName = user.name;
+    if (!userName) {
+      const userRecord = await SupabaseVaultRepository.findUserById(user.id);
+      userName = userRecord?.fullName || "Dueño Principal";
+    }
     const closingsData = await P2PAccountingService.getDailyClosings(user.id);
-    return c.json({ data: closingsData }, 200);
+    return c.json(
+      {
+        data: {
+          ...closingsData,
+          userName,
+        },
+      },
+      200
+    );
   })
   .post(
     "/p2p/vault",

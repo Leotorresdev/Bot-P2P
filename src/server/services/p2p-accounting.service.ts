@@ -151,11 +151,155 @@ function normalizePayMethod(rawName: string | undefined): VenezuelanBank {
   return "Banesco";
 }
 
+interface BinanceC2COrderItem {
+  orderNumber: string;
+  advNo?: string;
+  tradeType: "BUY" | "SELL";
+  asset?: string;
+  fiat?: string;
+  amount: string;
+  totalPrice?: string;
+  unitPrice: string;
+  orderStatus: string | number;
+  createTime: number;
+  commission?: string;
+  counterPartNickName?: string;
+  payMethodName?: string;
+  advertisementRole?: "MAKER" | "TAKER";
+}
+
+async function fetchBinanceOrdersBySide(
+  apiKey: string,
+  apiSecret: string,
+  tradeType: "BUY" | "SELL"
+): Promise<{ success: boolean; data: BinanceC2COrderItem[]; error?: string }> {
+  try {
+    const timestamp = Date.now();
+    // Parámetro tradeType es OBLIGATORIO en Binance SAPI C2C. recvWindow=60000 previene desincronización de reloj.
+    const queryString = `tradeType=${tradeType}&timestamp=${timestamp}&recvWindow=60000&rows=100`;
+    const signature = signBinanceQuery(queryString, apiSecret);
+
+    const res = await fetch(
+      `https://api.binance.com/sapi/v1/c2c/orderMatch/listUserOrderHistory?${queryString}&signature=${signature}`,
+      {
+        method: "GET",
+        headers: {
+          "X-MBX-APIKEY": apiKey,
+        },
+        signal: AbortSignal.timeout(15000),
+      }
+    );
+
+    const json = (await res.json()) as {
+      code: string | number;
+      message?: string;
+      msg?: string;
+      data?: BinanceC2COrderItem[];
+      total?: number;
+      success?: boolean;
+    };
+
+    if (!res.ok || (json.code !== "000000" && json.code !== 0 && json.code !== "0")) {
+      const errMsg = json.message || json.msg || `HTTP ${res.status}`;
+      console.warn(`[Binance SAPI C2C] Error consultando órdenes ${tradeType}:`, errMsg);
+      return { success: false, data: [], error: errMsg };
+    }
+
+    return {
+      success: true,
+      data: Array.isArray(json.data) ? json.data : [],
+    };
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[Binance SAPI C2C] Excepción en llamada ${tradeType}:`, errMsg);
+    return { success: false, data: [], error: errMsg };
+  }
+}
+
 export class P2PAccountingService {
   /**
+   * Prueba en vivo si las credenciales conectadas a la Bóveda responden con éxito en Binance SAPI.
+   */
+  public static async testBinanceConnection(userId: string): Promise<{
+    readonly success: boolean;
+    readonly message: string;
+    readonly orderCount?: number;
+    readonly errorDetails?: string;
+  }> {
+    const credential =
+      await SupabaseVaultRepository.getBinanceCredential(userId);
+    if (!credential) {
+      return {
+        success: false,
+        message:
+          "No tienes una API Key guardada en la Bóveda. Guarda tus claves primero.",
+      };
+    }
+
+    try {
+      const { apiKey, apiSecret } = decryptBinanceCredentials(
+        credential.apiKeyEncrypted,
+        credential.iv,
+        credential.authTag
+      );
+
+      const timestamp = Date.now();
+      const queryString = `tradeType=BUY&timestamp=${timestamp}&recvWindow=60000&rows=10`;
+      const signature = signBinanceQuery(queryString, apiSecret);
+
+      const res = await fetch(
+        `https://api.binance.com/sapi/v1/c2c/orderMatch/listUserOrderHistory?${queryString}&signature=${signature}`,
+        {
+          method: "GET",
+          headers: {
+            "X-MBX-APIKEY": apiKey,
+          },
+          signal: AbortSignal.timeout(15000),
+        }
+      );
+
+      const json = (await res.json()) as {
+        code: string | number;
+        message?: string;
+        msg?: string;
+        data?: unknown[];
+      };
+
+      if (
+        !res.ok ||
+        (json.code !== "000000" && json.code !== 0 && json.code !== "0")
+      ) {
+        const errorMsg =
+          json.msg || json.message || `Código de error Binance: ${json.code}`;
+        return {
+          success: false,
+          message: `Binance rechazó la conexión: ${errorMsg}`,
+          errorDetails: errorMsg,
+        };
+      }
+
+      // Sincronizar órdenes inmediatamente
+      const synced = await this.getUserOrdersFromVaultOrBinance(userId);
+
+      return {
+        success: true,
+        message: `¡Conexión verificada exitosamente con Binance! Se detectaron ${synced.length} órdenes conciliadas en tu historial.`,
+        orderCount: synced.length,
+      };
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        message: `Error al conectar con los servidores de Binance: ${errorMsg}`,
+        errorDetails: errorMsg,
+      };
+    }
+  }
+
+  /**
    * Si el usuario tiene credenciales SAPI de Binance conectadas, sincroniza sus órdenes
-   * reales desde `/sapi/v1/c2c/orderMatch/listUserOrderHistory`.
-   * Si no tiene llaves o aún no ha operado, devuelve su lista real en base de datos (vacía al inicio).
+   * reales consultando tanto BUY como SELL en paralelo desde `/sapi/v1/c2c/orderMatch/listUserOrderHistory`.
+   * Si no tiene llaves o aún no ha operado, devuelve su lista real en base de datos.
    */
   public static async getUserOrdersFromVaultOrBinance(
     userId: string
@@ -171,95 +315,88 @@ export class P2PAccountingService {
           credential.authTag
         );
 
-        const timestamp = Date.now();
-        const queryString = `timestamp=${timestamp}&rows=50`;
-        const signature = signBinanceQuery(queryString, apiSecret);
+        // Binance SAPI requiere dos llamadas paralelas para BUY y SELL
+        const [buyRes, sellRes] = await Promise.all([
+          fetchBinanceOrdersBySide(apiKey, apiSecret, "BUY"),
+          fetchBinanceOrdersBySide(apiKey, apiSecret, "SELL"),
+        ]);
 
-        const res = await fetch(
-          `https://api.binance.com/sapi/v1/c2c/orderMatch/listUserOrderHistory?${queryString}&signature=${signature}`,
-          {
-            method: "GET",
-            headers: {
-              "X-MBX-APIKEY": apiKey,
-            },
-            signal: AbortSignal.timeout(4500),
-          }
-        );
+        const allRawItems: BinanceC2COrderItem[] = [
+          ...buyRes.data,
+          ...sellRes.data,
+        ];
 
-        if (res.ok) {
-          const json = (await res.json()) as {
-            data?: Array<{
-              orderNumber: string;
-              tradeType: "BUY" | "SELL";
-              orderStatus: string;
-              amount: string;
-              commission: string;
-              unitPrice: string;
-              counterPartNickName: string;
-              payMethodName?: string;
-              createTime: number;
-              advertisementRole?: "MAKER" | "TAKER";
-            }>;
-          };
+        if (allRawItems.length > 0) {
+          // Filtrar órdenes completadas (status "COMPLETED" o código 4)
+          const completed = allRawItems.filter(
+            (o) =>
+              o.orderStatus === "COMPLETED" ||
+              String(o.orderStatus) === "4"
+          );
 
-          if (json.data && Array.isArray(json.data)) {
-            const completed = json.data.filter(
-              (o) => o.orderStatus === "COMPLETED"
+          // Ordenar cronológicamente (más recientes primero)
+          completed.sort((a, b) => (b.createTime || 0) - (a.createTime || 0));
+
+          // Calculamos costo base promedio de las compras reales
+          const buyOrders = completed.filter((o) => o.tradeType === "BUY");
+          let avgBuyRate = new Decimal("0");
+          if (buyOrders.length > 0) {
+            const sumRates = buyOrders.reduce(
+              (acc, b) => acc.plus(new Decimal(b.unitPrice || "0")),
+              new Decimal(0)
             );
+            avgBuyRate = sumRates.div(buyOrders.length);
+          }
 
-            // Calculamos costo base promedio de las compras reales
-            const buyOrders = completed.filter((o) => o.tradeType === "BUY");
-            let avgBuyRate = new Decimal("0");
-            if (buyOrders.length > 0) {
-              const sumRates = buyOrders.reduce(
-                (acc, b) => acc.plus(new Decimal(b.unitPrice || "0")),
-                new Decimal(0)
-              );
-              avgBuyRate = sumRates.div(buyOrders.length);
-            }
-
-            const syncedRecords: StoredP2POrderRecord[] = completed.map((o) => {
-              const dateVet = new Date(o.createTime).toLocaleTimeString(
-                "es-VE",
-                {
-                  timeZone: "America/Caracas",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  second: "2-digit",
-                }
-              );
-              const unitPriceDec = new Decimal(o.unitPrice || "0");
-              const fallbackBasis = avgBuyRate.gt(0)
-                ? avgBuyRate
-                : unitPriceDec;
-
-              return {
-                orderNumber: String(o.orderNumber),
-                userId,
-                timeVetLabel: `Hoy • ${dateVet}`,
-                tradeType: o.tradeType === "BUY" ? "BUY" : "SELL",
-                advertisementRole:
-                  o.advertisementRole === "TAKER" ? "TAKER" : "MAKER",
-                payMethodName: normalizePayMethod(o.payMethodName),
-                counterPartNickName: o.counterPartNickName || "Cliente P2P",
-                amountUsdt: new Decimal(o.amount || "0").toFixed(2),
-                commissionUsdt: new Decimal(o.commission || "0").toFixed(2),
-                unitPriceVes: unitPriceDec.toFixed(2),
-                costBasisRateVes: fallbackBasis.toFixed(2),
-              };
+          const syncedRecords: StoredP2POrderRecord[] = completed.map((o) => {
+            const dateVet = new Date(o.createTime).toLocaleTimeString("es-VE", {
+              timeZone: "America/Caracas",
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
             });
+            const unitPriceDec = new Decimal(o.unitPrice || "0");
+            const amountUsdtDec = new Decimal(o.amount || "0");
+            const fallbackBasis = avgBuyRate.gt(0)
+              ? avgBuyRate
+              : unitPriceDec;
 
-            if (syncedRecords.length > 0) {
-              await SupabaseVaultRepository.saveUserOrders(
-                userId,
-                syncedRecords
-              );
-              return syncedRecords;
-            }
+            // Comisión oficial Maker 0.163%
+            const commNum = o.commission ? parseFloat(o.commission) : 0;
+            const commissionUsdt =
+              commNum > 0
+                ? new Decimal(o.commission!).toFixed(4)
+                : amountUsdtDec.times("0.00163").toFixed(4);
+
+            return {
+              orderNumber: String(o.orderNumber),
+              userId,
+              timeVetLabel: `Hoy • ${dateVet}`,
+              tradeType: o.tradeType === "BUY" ? "BUY" : "SELL",
+              advertisementRole:
+                o.advertisementRole === "TAKER" ? "TAKER" : "MAKER",
+              payMethodName: normalizePayMethod(o.payMethodName),
+              counterPartNickName: o.counterPartNickName || "Cliente P2P",
+              amountUsdt: amountUsdtDec.toFixed(2),
+              commissionUsdt,
+              unitPriceVes: unitPriceDec.toFixed(2),
+              costBasisRateVes: fallbackBasis.toFixed(2),
+            };
+          });
+
+          if (syncedRecords.length > 0) {
+            await SupabaseVaultRepository.saveUserOrders(
+              userId,
+              syncedRecords
+            );
+            return syncedRecords;
           }
         }
-      } catch {
-        // Si Binance API no responde, leemos las órdenes persistidas del usuario en Supabase
+      } catch (err) {
+        console.error(
+          "[P2PAccountingService] Error en sincronización con Binance:",
+          err
+        );
       }
     }
 

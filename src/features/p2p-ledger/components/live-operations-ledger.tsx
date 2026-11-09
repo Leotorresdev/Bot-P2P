@@ -12,10 +12,12 @@ import {
   PiggyBank,
   CheckCircle2,
   X,
+  RefreshCw,
 } from "lucide-react";
 import {
   useP2POrdersQuery,
   useP2PSummaryQuery,
+  useSyncBinanceMutation,
 } from "@/features/p2p-ledger/api/use-p2p-queries";
 import type {
   PeriodFilter,
@@ -104,6 +106,22 @@ export function LiveOperationsLedger({
   });
 
   const summaryQuery = useP2PSummaryQuery(period, "FIFO");
+  const syncMutation = useSyncBinanceMutation();
+  const [syncFeedback, setSyncFeedback] = React.useState<string | null>(null);
+
+  const handleManualSync = () => {
+    setSyncFeedback(null);
+    syncMutation.mutate(undefined, {
+      onSuccess: (res) => {
+        setSyncFeedback(res.message);
+        setTimeout(() => setSyncFeedback(null), 4000);
+      },
+      onError: (err) => {
+        setSyncFeedback(`Error: ${err.message}`);
+        setTimeout(() => setSyncFeedback(null), 5000);
+      },
+    });
+  };
 
   const data = ordersQuery.data;
   const allRows = data?.items ?? [];
@@ -138,6 +156,29 @@ export function LiveOperationsLedger({
             <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-0.5 text-xs font-extrabold text-emerald-700">
               {filteredRows.length} operaciones
             </span>
+            <button
+              type="button"
+              onClick={handleManualSync}
+              disabled={syncMutation.isPending}
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300 bg-emerald-100/70 px-3 py-1 text-xs font-bold text-emerald-800 transition-all hover:bg-emerald-200 disabled:opacity-50 cursor-pointer"
+            >
+              <RefreshCw
+                className={cn(
+                  "h-3 w-3 text-emerald-700",
+                  syncMutation.isPending && "animate-spin"
+                )}
+              />
+              <span>
+                {syncMutation.isPending
+                  ? "Sincronizando..."
+                  : "Sincronizar con Binance"}
+              </span>
+            </button>
+            {syncFeedback && (
+              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                {syncFeedback}
+              </span>
+            )}
           </div>
           <p className="text-xs font-medium text-slate-500">
             Haz clic sobre cualquier operación para ver la explicación paso a
