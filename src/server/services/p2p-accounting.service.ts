@@ -168,52 +168,69 @@ interface BinanceC2COrderItem {
   advertisementRole?: "MAKER" | "TAKER";
 }
 
+const BINANCE_HOSTS = [
+  "https://api.binance.com",
+  "https://api1.binance.com",
+  "https://api2.binance.com",
+  "https://api3.binance.com",
+  "https://api-gcp.binance.com",
+] as const;
+
 async function fetchBinanceOrdersBySide(
   apiKey: string,
   apiSecret: string,
   tradeType: "BUY" | "SELL"
 ): Promise<{ success: boolean; data: BinanceC2COrderItem[]; error?: string }> {
-  try {
-    const timestamp = Date.now();
-    // Parámetro tradeType es OBLIGATORIO en Binance SAPI C2C. recvWindow=60000 previene desincronización de reloj.
-    const queryString = `tradeType=${tradeType}&timestamp=${timestamp}&recvWindow=60000&rows=100`;
-    const signature = signBinanceQuery(queryString, apiSecret);
+  let lastError = "";
 
-    const res = await fetch(
-      `https://api.binance.com/sapi/v1/c2c/orderMatch/listUserOrderHistory?${queryString}&signature=${signature}`,
-      {
-        method: "GET",
-        headers: {
-          "X-MBX-APIKEY": apiKey,
-        },
-        signal: AbortSignal.timeout(15000),
+  for (const host of BINANCE_HOSTS) {
+    try {
+      const timestamp = Date.now();
+      // Parámetro tradeType es OBLIGATORIO en Binance SAPI C2C. recvWindow=60000 previene desincronización de reloj.
+      const queryString = `tradeType=${tradeType}&timestamp=${timestamp}&recvWindow=60000&rows=100`;
+      const signature = signBinanceQuery(queryString, apiSecret);
+
+      const res = await fetch(
+        `${host}/sapi/v1/c2c/orderMatch/listUserOrderHistory?${queryString}&signature=${signature}`,
+        {
+          method: "GET",
+          headers: {
+            "X-MBX-APIKEY": apiKey,
+          },
+          signal: AbortSignal.timeout(12000),
+        }
+      );
+
+      const json = (await res.json()) as {
+        code: string | number;
+        message?: string;
+        msg?: string;
+        data?: BinanceC2COrderItem[];
+        total?: number;
+        success?: boolean;
+      };
+
+      if (res.ok && (json.code === "000000" || json.code === 0 || json.code === "0")) {
+        return {
+          success: true,
+          data: Array.isArray(json.data) ? json.data : [],
+        };
       }
-    );
 
-    const json = (await res.json()) as {
-      code: string | number;
-      message?: string;
-      msg?: string;
-      data?: BinanceC2COrderItem[];
-      total?: number;
-      success?: boolean;
-    };
+      lastError = json.message || json.msg || `HTTP ${res.status}`;
+      console.warn(`[Binance SAPI C2C] Host ${host} respondió:`, lastError);
 
-    if (!res.ok || (json.code !== "000000" && json.code !== 0 && json.code !== "0")) {
-      const errMsg = json.message || json.msg || `HTTP ${res.status}`;
-      console.warn(`[Binance SAPI C2C] Error consultando órdenes ${tradeType}:`, errMsg);
-      return { success: false, data: [], error: errMsg };
+      // Si no es un problema de red o geo-bloqueo, no seguimos rotando
+      if (json.code === -2008 || json.code === -2014 || json.code === -1022) {
+        break;
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      console.warn(`[Binance SAPI C2C] Falló host ${host}:`, lastError);
     }
-
-    return {
-      success: true,
-      data: Array.isArray(json.data) ? json.data : [],
-    };
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    console.error(`[Binance SAPI C2C] Excepción en llamada ${tradeType}:`, errMsg);
-    return { success: false, data: [], error: errMsg };
   }
+
+  return { success: false, data: [], error: lastError };
 }
 
 export class P2PAccountingService {
@@ -247,34 +264,65 @@ export class P2PAccountingService {
       const queryString = `tradeType=BUY&timestamp=${timestamp}&recvWindow=60000&rows=10`;
       const signature = signBinanceQuery(queryString, apiSecret);
 
-      const res = await fetch(
-        `https://api.binance.com/sapi/v1/c2c/orderMatch/listUserOrderHistory?${queryString}&signature=${signature}`,
-        {
-          method: "GET",
-          headers: {
-            "X-MBX-APIKEY": apiKey,
-          },
-          signal: AbortSignal.timeout(15000),
+      let lastErrorMsg = "";
+      let isVerified = false;
+
+      for (const host of BINANCE_HOSTS) {
+        try {
+          const res = await fetch(
+            `${host}/sapi/v1/c2c/orderMatch/listUserOrderHistory?${queryString}&signature=${signature}`,
+            {
+              method: "GET",
+              headers: {
+                "X-MBX-APIKEY": apiKey,
+              },
+              signal: AbortSignal.timeout(12000),
+            }
+          );
+
+          const json = (await res.json()) as {
+            code: string | number;
+            message?: string;
+            msg?: string;
+            data?: unknown[];
+          };
+
+          if (
+            res.ok &&
+            (json.code === "000000" || json.code === 0 || json.code === "0")
+          ) {
+            isVerified = true;
+            break;
+          }
+
+          lastErrorMsg =
+            json.msg || json.message || `Código de error Binance: ${json.code}`;
+
+          if (json.code === -2008 || json.code === -2014 || json.code === -1022) {
+            break;
+          }
+        } catch (err) {
+          lastErrorMsg = err instanceof Error ? err.message : String(err);
         }
-      );
+      }
 
-      const json = (await res.json()) as {
-        code: string | number;
-        message?: string;
-        msg?: string;
-        data?: unknown[];
-      };
+      if (!isVerified) {
+        if (
+          lastErrorMsg.toLowerCase().includes("restricted location") ||
+          lastErrorMsg.toLowerCase().includes("eligibility")
+        ) {
+          return {
+            success: false,
+            message:
+              "Binance detectó que tu conexión actual o ruta de internet fue asignada momentáneamente a un nodo con restricción geográfica. Si tienes un proxy o extensión de red activa, cámbiala a Colombia/Panamá/España o desactívala; si estás en conexión local de Venezuela sin VPN, reintenta en breve mientras tu proveedor refresca la ruta.",
+            errorDetails: lastErrorMsg,
+          };
+        }
 
-      if (
-        !res.ok ||
-        (json.code !== "000000" && json.code !== 0 && json.code !== "0")
-      ) {
-        const errorMsg =
-          json.msg || json.message || `Código de error Binance: ${json.code}`;
         return {
           success: false,
-          message: `Binance rechazó la conexión: ${errorMsg}`,
-          errorDetails: errorMsg,
+          message: `Binance rechazó la conexión: ${lastErrorMsg}`,
+          errorDetails: lastErrorMsg,
         };
       }
 
