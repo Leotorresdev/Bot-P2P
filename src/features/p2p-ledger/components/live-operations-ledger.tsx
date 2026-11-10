@@ -13,6 +13,8 @@ import {
   CheckCircle2,
   X,
   RefreshCw,
+  Calendar,
+  Download,
 } from "lucide-react";
 import {
   useP2POrdersQuery,
@@ -94,6 +96,7 @@ export function LiveOperationsLedger({
   onSelectBank,
 }: LiveOperationsLedgerProps) {
   const [tradeType, setTradeType] = React.useState<TradeTypeFilter>("ALL");
+  const [dateFilter, setDateFilter] = React.useState<string>("");
   const [searchQuery, setSearchQuery] = React.useState("");
   const [expandedOrder, setExpandedOrder] = React.useState<string | null>(null);
   const [page, setPage] = React.useState<number>(1);
@@ -102,6 +105,7 @@ export function LiveOperationsLedger({
     period,
     tradeType,
     bank: selectedBank ?? undefined,
+    date: dateFilter || undefined,
     page,
   });
 
@@ -158,7 +162,7 @@ export function LiveOperationsLedger({
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
               </span>
-              En Vivo (Auto-Sync 8s)
+              En Vivo (Ciclo 24h)
             </span>
             <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-0.5 text-xs font-extrabold text-slate-700">
               {data?.totalCount ?? filteredRows.length} operaciones
@@ -181,6 +185,19 @@ export function LiveOperationsLedger({
                   : "Sincronizar Ahora"}
               </span>
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                const url = dateFilter
+                  ? `/api/p2p/export-csv?date=${encodeURIComponent(dateFilter)}`
+                  : "/api/p2p/export-csv";
+                window.location.href = url;
+              }}
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400 bg-emerald-600 px-3.5 py-1 text-xs font-bold text-white shadow-xs transition-all hover:bg-emerald-500 cursor-pointer"
+            >
+              <Download className="h-3 w-3" />
+              <span>Descargar Excel</span>
+            </button>
             {syncFeedback && (
               <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
                 {syncFeedback}
@@ -188,8 +205,7 @@ export function LiveOperationsLedger({
             )}
           </div>
           <p className="text-xs font-medium text-slate-500">
-            Haz clic sobre cualquier operación para ver la explicación paso a
-            paso de tu ganancia.
+            Registro continuo de compras y ventas de las 24 horas con cálculo automático de ganancias e impuestos.
           </p>
         </div>
 
@@ -263,6 +279,97 @@ export function LiveOperationsLedger({
             })}
           </div>
         </div>
+      </div>
+
+      {/* Selector y Filtros por Fecha */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 shadow-xs">
+            <Calendar className="h-4 w-4 text-emerald-600 shrink-0" />
+            <span className="text-xs font-bold text-slate-700">Ver Fecha:</span>
+            <input
+              type="date"
+              value={dateFilter}
+              onChange={(e) => {
+                setDateFilter(e.target.value);
+                setPage(1);
+              }}
+              className="bg-transparent text-xs font-semibold text-slate-800 focus:outline-none cursor-pointer"
+            />
+            {dateFilter && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDateFilter("");
+                  setPage(1);
+                }}
+                className="text-slate-400 hover:text-slate-600 transition-colors ml-1"
+                title="Quitar filtro de fecha"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Chips rápidos de fechas disponibles */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setDateFilter("");
+                setPage(1);
+              }}
+              className={cn(
+                "rounded-lg px-2.5 py-1 text-xs font-bold transition-all",
+                !dateFilter
+                  ? "bg-slate-900 text-white shadow-sm"
+                  : "border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+              )}
+            >
+              Todas las Fechas
+            </button>
+
+            {data?.availableDates?.map((dateStr) => {
+              const [d, m, y] = dateStr.split("/");
+              const isoDate = `${y}-${m}-${d}`;
+              const isSelected = dateFilter === isoDate || dateFilter === dateStr;
+
+              const nowVet = new Date();
+              const todayStr = nowVet.toLocaleDateString("es-VE", {
+                timeZone: "America/Caracas",
+                day: "2-digit",
+                month: "2-digit",
+                year: "numeric",
+              });
+              const isToday = dateStr === todayStr;
+
+              return (
+                <button
+                  key={dateStr}
+                  type="button"
+                  onClick={() => {
+                    setDateFilter(isSelected ? "" : isoDate);
+                    setPage(1);
+                  }}
+                  className={cn(
+                    "rounded-lg px-2.5 py-1 text-xs font-bold transition-all flex items-center gap-1",
+                    isSelected
+                      ? "bg-emerald-600 text-white shadow-sm"
+                      : "border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+                  )}
+                >
+                  {isToday ? `🟢 Hoy (${dateStr})` : `📅 ${dateStr}`}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {dateFilter && (
+          <span className="text-xs font-bold text-emerald-800 bg-emerald-100/70 border border-emerald-300 px-2.5 py-1 rounded-lg">
+            Filtrando fecha: {dateFilter.includes("-") ? dateFilter.split("-").reverse().join("/") : dateFilter} ({data?.totalCount ?? filteredRows.length} operaciones)
+          </span>
+        )}
       </div>
 
       {/* Píldoras Rápidas de Bancos */}
@@ -385,11 +492,20 @@ export function LiveOperationsLedger({
                     }}
                     className="grid cursor-pointer grid-cols-12 items-center px-4 py-3.5"
                   >
-                    {/* 1. Hora y Orden */}
-                    <div className="col-span-2 flex flex-col gap-0.5">
-                      <span className="text-xs font-extrabold text-slate-900">
-                        {order.timeVetLabel}
-                      </span>
+                    {/* 1. Fecha, Hora y Orden */}
+                    <div className="col-span-2 flex flex-col gap-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="rounded-md border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[11px] font-extrabold text-slate-800">
+                          {order.timeVetLabel.includes("•")
+                            ? order.timeVetLabel.split("•")[0]?.trim()
+                            : order.timeVetLabel}
+                        </span>
+                        {order.timeVetLabel.includes("•") && (
+                          <span className="text-[11px] font-semibold text-slate-500">
+                            {order.timeVetLabel.split("•")[1]?.trim()}
+                          </span>
+                        )}
+                      </div>
                       <span className="font-mono text-[11px] font-medium text-slate-400">
                         Orden #{order.orderNumber}
                       </span>
@@ -472,7 +588,7 @@ export function LiveOperationsLedger({
                       <span className="text-[10px] font-semibold text-amber-700">
                         {isBuy
                           ? "Recarga"
-                          : `IVA: -${formatVes(order.seniatTax16Ves)} Bs.`}
+                          : `SENIAT (${order.seniatTaxPercentApplied ?? summaryQuery.data?.seniatTaxRatePercent ?? "16"}%): -${formatVes(order.seniatTax16Ves)} Bs.`}
                       </span>
                     </div>
 
@@ -584,7 +700,7 @@ export function LiveOperationsLedger({
 
                             <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
                               <span className="text-[11px] font-bold text-amber-900">
-                                3. Apartado IVA (16%)
+                                3. Apartado SENIAT ({order.seniatTaxPercentApplied ?? summaryQuery.data?.seniatTaxRatePercent ?? "16"}%)
                               </span>
                               <div className="mt-1 text-base font-extrabold text-amber-700">
                                 -{formatVes(order.seniatTax16Ves)} Bs.

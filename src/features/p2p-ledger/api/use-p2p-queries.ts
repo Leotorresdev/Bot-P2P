@@ -8,6 +8,7 @@ import type {
   PeriodFilter,
   SaveBinanceVaultInput,
   TradeTypeFilter,
+  UpdateTaxConfigInput,
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
 
 // Query Key Factory estricta (Single Source of Truth para invalidación quirúrgica)
@@ -21,9 +22,11 @@ export const p2pQueryKeys = {
     period: PeriodFilter;
     tradeType: TradeTypeFilter;
     bank?: string;
+    date?: string;
     page: number;
   }) => [...p2pQueryKeys.all, "orders", filters] as const,
   closings: () => [...p2pQueryKeys.all, "closings"] as const,
+  taxConfig: () => [...p2pQueryKeys.all, "tax-config"] as const,
 };
 
 export function useP2PSummaryQuery(period: PeriodFilter, method: LotMethod) {
@@ -74,6 +77,7 @@ export function useP2POrdersQuery(params: {
   period: PeriodFilter;
   tradeType: TradeTypeFilter;
   bank?: string;
+  date?: string;
   page: number;
 }) {
   return useQuery({
@@ -84,6 +88,7 @@ export function useP2POrdersQuery(params: {
           period: params.period,
           tradeType: params.tradeType,
           bank: params.bank,
+          date: params.date,
           page: String(params.page),
           limit: "20",
         },
@@ -198,6 +203,46 @@ export function useUnlockVaultMutation() {
         );
       }
       return res.json();
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
+    },
+  });
+}
+
+export function useTaxConfigQuery() {
+  return useQuery({
+    queryKey: p2pQueryKeys.taxConfig(),
+    queryFn: async () => {
+      const res = await apiClient.api.p2p["tax-config"].$get();
+      if (!res.ok) {
+        throw new Error("No se pudo cargar la configuración de impuestos.");
+      }
+      const json = await res.json();
+      return json.data;
+    },
+  });
+}
+
+export function useUpdateTaxConfigMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: UpdateTaxConfigInput) => {
+      const res = await apiClient.api.p2p["tax-config"].$post({
+        json: input,
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(
+          (json as { error?: string }).error ??
+            "Error al actualizar la configuración tributaria."
+        );
+      }
+      return json as {
+        message: string;
+        data: { seniatTaxPercent: number; makerFeePercent: number };
+      };
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });

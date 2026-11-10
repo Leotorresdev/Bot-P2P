@@ -46,11 +46,19 @@ export interface StoredP2POrderRecord {
   readonly lotRemainingLabel?: string;
 }
 
+export interface StoredUserTaxConfigRecord {
+  readonly userId: string;
+  readonly seniatTaxPercent: number;
+  readonly makerFeePercent: number;
+  readonly updatedAt: string;
+}
+
 interface LocalVaultDatabase {
   users: StoredUserRecord[];
   credentials: StoredVaultCredentialRecord[];
   orders: StoredP2POrderRecord[];
   closings: Array<DailyClosingActaDto & { readonly userId: string }>;
+  taxConfigs?: StoredUserTaxConfigRecord[];
 }
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -67,6 +75,7 @@ function readLocalDb(): LocalVaultDatabase {
         credentials: [],
         orders: [],
         closings: [],
+        taxConfigs: [],
       };
       fs.writeFileSync(DB_FILE_PATH, JSON.stringify(emptyDb, null, 2), "utf8");
       return emptyDb;
@@ -78,9 +87,10 @@ function readLocalDb(): LocalVaultDatabase {
       credentials: parsed.credentials ?? [],
       orders: parsed.orders ?? [],
       closings: parsed.closings ?? [],
+      taxConfigs: parsed.taxConfigs ?? [],
     };
   } catch {
-    return { users: [], credentials: [], orders: [], closings: [] };
+    return { users: [], credentials: [], orders: [], closings: [], taxConfigs: [] };
   }
 }
 
@@ -378,5 +388,77 @@ export class SupabaseVaultRepository {
 
     const db = readLocalDb();
     return db.closings.filter((c) => c.userId === userId);
+  }
+
+  /**
+   * Obtiene la configuración de porcentajes de impuesto SENIAT y comisión del usuario.
+   * Por defecto: SENIAT 16% y Maker 0.163%.
+   */
+  public static async getUserTaxConfig(
+    userId: string
+  ): Promise<{ seniatTaxPercent: number; makerFeePercent: number }> {
+    try {
+      const { data, error } = await supabase
+        .from("p2p_tax_config")
+        .select("*")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (!error && data) {
+        return {
+          seniatTaxPercent: Number(data.seniat_tax_percent ?? 16),
+          makerFeePercent: Number(data.maker_fee_percent ?? 0.163),
+        };
+      }
+    } catch {
+      // Fallback
+    }
+
+    const db = readLocalDb();
+    const found = db.taxConfigs?.find((t) => t.userId === userId);
+    if (found) {
+      return {
+        seniatTaxPercent: found.seniatTaxPercent,
+        makerFeePercent: found.makerFeePercent,
+      };
+    }
+
+    return {
+      seniatTaxPercent: 16,
+      makerFeePercent: 0.163,
+    };
+  }
+
+  /**
+   * Guarda o actualiza la configuración personalizada de impuestos y comisiones del usuario.
+   */
+  public static async saveUserTaxConfig(
+    userId: string,
+    config: { seniatTaxPercent: number; makerFeePercent: number }
+  ): Promise<void> {
+    const updatedAt = new Date().toISOString();
+    try {
+      await supabase.from("p2p_tax_config").upsert({
+        user_id: userId,
+        seniat_tax_percent: config.seniatTaxPercent,
+        maker_fee_percent: config.makerFeePercent,
+        updated_at: updatedAt,
+      });
+    } catch {
+      // Fallback
+    }
+
+    const db = readLocalDb();
+    if (!db.taxConfigs) {
+      db.taxConfigs = [];
+    }
+    db.taxConfigs = db.taxConfigs.filter((t) => t.userId !== userId);
+    db.taxConfigs.push({
+      userId,
+      seniatTaxPercent: config.seniatTaxPercent,
+      makerFeePercent: config.makerFeePercent,
+      updatedAt,
+    });
+    writeLocalDb(db);
   }
 }

@@ -15,6 +15,7 @@ import {
   LoginCredentialsSchema,
   RegisterUserSchema,
   SaveBinanceVaultBodySchema,
+  UpdateTaxConfigSchema,
   VerifyPasswordSchema,
   type LoginVaultResponseDto,
   type RegisterUserResponseDto,
@@ -449,11 +450,12 @@ export const routes = baseApp
       if (!user) {
         return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
       }
-      const { tradeType, bank, page, limit } = c.req.valid("query");
+      const { tradeType, bank, date, page, limit } = c.req.valid("query");
       const result = await P2PAccountingService.getPaginatedOrders({
         userId: user.id,
         tradeType,
         bank,
+        date,
         page,
         limit,
       });
@@ -518,18 +520,66 @@ export const routes = baseApp
       );
     }
   )
+  .get("/p2p/tax-config", async (c) => {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
+    }
+    const config = await P2PAccountingService.getUserTaxConfig(user.id);
+    return c.json({ data: config }, 200);
+  })
+  .post(
+    "/p2p/tax-config",
+    zValidator("json", UpdateTaxConfigSchema),
+    async (c) => {
+      const user = c.get("user");
+      if (!user) {
+        return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
+      }
+      if (user.role === "AUDITOR_SENIAT") {
+        return c.json(
+          {
+            error:
+              "Acceso denegado: El Modo Contador no tiene permisos para modificar la configuración fiscal.",
+          },
+          403
+        );
+      }
+      const payload = c.req.valid("json");
+      const updated = await P2PAccountingService.updateUserTaxConfig(
+        user.id,
+        payload
+      );
+      return c.json(
+        {
+          message: `Tasas actualizadas exitosamente: SENIAT ${updated.seniatTaxPercent}% y Comisión ${updated.makerFeePercent}%.`,
+          data: updated,
+        },
+        200
+      );
+    }
+  )
   .get("/p2p/export-csv", async (c) => {
     const user = c.get("user");
     if (!user) {
       return c.redirect("/login");
     }
 
-    const { items } = await P2PAccountingService.getPaginatedOrders({
-      userId: user.id,
-      tradeType: "ALL",
-      page: 1,
-      limit: 500,
-    });
+    const dateParam = c.req.query("date") || undefined;
+    const [ordersResult, taxConfig] = await Promise.all([
+      P2PAccountingService.getPaginatedOrders({
+        userId: user.id,
+        tradeType: "ALL",
+        date: dateParam,
+        page: 1,
+        limit: 5000,
+      }),
+      P2PAccountingService.getUserTaxConfig(user.id),
+    ]);
+
+    const items = ordersResult.items;
+    const seniatVesHeader = `Impuesto_SENIAT_${taxConfig.seniatTaxPercent}_VES`;
+    const seniatUsdtHeader = `Impuesto_SENIAT_${taxConfig.seniatTaxPercent}_USDT`;
 
     const csvHeader = [
       "Orden_Binance",
@@ -544,8 +594,8 @@ export const routes = baseApp
       "Tasa_Costo_Base_VES",
       "Total_Banco_VES",
       "Capital_Rotado_Exento_VES",
-      "Impuesto_SENIAT_16_VES",
-      "Impuesto_SENIAT_16_USDT",
+      seniatVesHeader,
+      seniatUsdtHeader,
       "Ganancia_Neta_Libre_VES",
       "Ganancia_Neta_Libre_USDT",
       "Margen_Porcentaje",
@@ -574,12 +624,15 @@ export const routes = baseApp
     );
 
     const csvString = [csvHeader, ...csvRows].join("\n");
+    const filenameDate = (dateParam && dateParam !== "ALL")
+      ? dateParam.replace(/\//g, "-")
+      : new Date().toISOString().slice(0, 10);
 
     return new Response(csvString, {
       status: 200,
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="Libro_Fiscal_SENIAT_16_P2P_${new Date().toISOString().slice(0, 10)}.csv"`,
+        "Content-Disposition": `attachment; filename="Registro_Diario_24H_SENIAT_${taxConfig.seniatTaxPercent}_P2P_${filenameDate}.csv"`,
       },
     });
   });

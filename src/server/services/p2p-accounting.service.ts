@@ -44,19 +44,36 @@ export interface RawCompletedOrderInput {
 
 /**
  * Motor matemático exacto (Decimal.js) que procesa una orden de Binance C2C,
- * aplica la comisión Maker del 0.163%, separa el Capital Rotado Exento del Margen Gravable
- * y calcula el 16% de Impuesto SENIAT (Norma BA VEN-NIF).
+ * aplica la comisión Maker configurable (por defecto 0.163%), separa el Capital Rotado Exento
+ * del Margen Gravable y calcula el Impuesto SENIAT configurable (por defecto 16% - Norma BA VEN-NIF).
  */
 export function calculateOrderFiscalMetrics(
-  raw: RawCompletedOrderInput
+  raw: RawCompletedOrderInput,
+  taxConfig?: { seniatTaxPercent?: number; makerFeePercent?: number }
 ): P2POrderRowDto {
   const amount = new Decimal(raw.amountUsdt);
   const unitPrice = new Decimal(raw.unitPriceVes);
   const costBasisRate = new Decimal(raw.costBasisRateVes);
 
+  const seniatRateDec =
+    taxConfig?.seniatTaxPercent != null
+      ? new Decimal(taxConfig.seniatTaxPercent).div(100)
+      : SENIAT_TAX_RATE;
+  const makerFeeRateDec =
+    taxConfig?.makerFeePercent != null
+      ? new Decimal(taxConfig.makerFeePercent).div(100)
+      : BINANCE_MAKER_FEE_RATE;
+
+  const seniatPctLabel = (
+    taxConfig?.seniatTaxPercent != null ? taxConfig.seniatTaxPercent : 16
+  ).toString();
+  const makerFeePctLabel = (
+    taxConfig?.makerFeePercent != null ? taxConfig.makerFeePercent : 0.163
+  ).toString();
+
   const fee =
     raw.advertisementRole === "MAKER"
-      ? amount.mul(BINANCE_MAKER_FEE_RATE)
+      ? amount.mul(makerFeeRateDec)
       : new Decimal(raw.commissionUsdt);
 
   const totalVes = amount.mul(unitPrice);
@@ -83,6 +100,8 @@ export function calculateOrderFiscalMetrics(
       exemptCapitalVes: totalVes.toFixed(2),
       seniatTax16Ves: "0.00",
       seniatTax16Usdt: "0.00",
+      seniatTaxPercentApplied: seniatPctLabel,
+      makerFeePercentApplied: makerFeePctLabel,
       netFreeProfitUsdt: "0.00",
       netFreeProfitVes: "0.00",
       marginPercent: "0.00",
@@ -100,11 +119,11 @@ export function calculateOrderFiscalMetrics(
     totalVes.minus(exemptCapitalVes).minus(feeInVes)
   );
 
-  const seniatTax16Ves = grossProfitVes.mul(SENIAT_TAX_RATE);
-  const netFreeProfitVes = grossProfitVes.minus(seniatTax16Ves);
+  const seniatTaxVes = grossProfitVes.mul(seniatRateDec);
+  const netFreeProfitVes = grossProfitVes.minus(seniatTaxVes);
 
-  const seniatTax16Usdt = unitPrice.gt(0)
-    ? seniatTax16Ves.div(unitPrice)
+  const seniatTaxUsdt = unitPrice.gt(0)
+    ? seniatTaxVes.div(unitPrice)
     : new Decimal(0);
   const netFreeProfitUsdt = unitPrice.gt(0)
     ? netFreeProfitVes.div(unitPrice)
@@ -127,8 +146,10 @@ export function calculateOrderFiscalMetrics(
     costBasisRateVes: costBasisRate.toFixed(2),
     totalPriceVes: totalVes.toFixed(2),
     exemptCapitalVes: exemptCapitalVes.toFixed(2),
-    seniatTax16Ves: seniatTax16Ves.toFixed(2),
-    seniatTax16Usdt: seniatTax16Usdt.toFixed(2),
+    seniatTax16Ves: seniatTaxVes.toFixed(2),
+    seniatTax16Usdt: seniatTaxUsdt.toFixed(2),
+    seniatTaxPercentApplied: seniatPctLabel,
+    makerFeePercentApplied: makerFeePctLabel,
     netFreeProfitUsdt: netFreeProfitUsdt.toFixed(2),
     netFreeProfitVes: netFreeProfitVes.toFixed(2),
     marginPercent: marginPct.toFixed(2),
@@ -468,12 +489,20 @@ export class P2PAccountingService {
           }
 
           const syncedRecords: StoredP2POrderRecord[] = completed.map((o) => {
-            const dateVet = new Date(o.createTime).toLocaleTimeString("es-VE", {
+            const d = new Date(o.createTime);
+            const dateStr = d.toLocaleDateString("es-VE", {
+              timeZone: "America/Caracas",
+              day: "2-digit",
+              month: "2-digit",
+              year: "numeric",
+            });
+            const timeStr = d.toLocaleTimeString("es-VE", {
               timeZone: "America/Caracas",
               hour: "2-digit",
               minute: "2-digit",
               second: "2-digit",
             });
+            const timeVetLabel = `${dateStr} • ${timeStr}`;
             const unitPriceDec = new Decimal(o.unitPrice || "0");
             const amountUsdtDec = new Decimal(o.amount || "0");
             const fallbackBasis = avgBuyRate.gt(0)
@@ -490,7 +519,7 @@ export class P2PAccountingService {
             return {
               orderNumber: String(o.orderNumber),
               userId,
-              timeVetLabel: `Hoy • ${dateVet}`,
+              timeVetLabel,
               tradeType: o.tradeType === "BUY" ? "BUY" : "SELL",
               advertisementRole:
                 o.advertisementRole === "TAKER" ? "TAKER" : "MAKER",
@@ -509,7 +538,7 @@ export class P2PAccountingService {
               syncedRecords
             );
             P2PAccountingService.lastSyncTimestampByUser.set(userId, Date.now());
-            return syncedRecords;
+            return SupabaseVaultRepository.getUserOrders(userId);
           }
         }
       } catch (err) {
@@ -537,14 +566,32 @@ export class P2PAccountingService {
     period: PeriodFilter,
     method: LotMethod
   ): Promise<PnlSummaryDto> {
-    const [rawOrders, benchmark] = await Promise.all([
+    const [rawOrders, benchmark, taxConfig] = await Promise.all([
       this.getUserOrdersFromVaultOrBinance(userId),
       BinanceP2PLiveService.getLiveMarketBenchmark(),
+      SupabaseVaultRepository.getUserTaxConfig(userId),
     ]);
 
     const liveRate = new Decimal(benchmark.benchmarkSellRateVes);
     const liveBuyRate = new Decimal(benchmark.benchmarkBuyRateVes);
-    const computedRows = rawOrders.map(calculateOrderFiscalMetrics);
+
+    // Fecha actual en Venezuela (America/Caracas, UTC-4) para el ciclo diario de 24 horas
+    const todayVetStr = new Date().toLocaleDateString("es-VE", {
+      timeZone: "America/Caracas",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+
+    // En ciclo diario (TODAY), consideramos únicamente las órdenes dentro de las 24h de hoy
+    const scopedOrders =
+      period === "TODAY"
+        ? rawOrders.filter((o) => o.timeVetLabel.includes(todayVetStr))
+        : rawOrders;
+
+    const computedRows = scopedOrders.map((o) =>
+      calculateOrderFiscalMetrics(o, taxConfig)
+    );
 
     let totalGrossVes = new Decimal(0);
     let totalTaxVes = new Decimal(0);
@@ -554,19 +601,11 @@ export class P2PAccountingService {
     let sellOrdersCount = 0;
     let totalMarginPct = new Decimal(0);
 
-    let totalWorkingCapitalUsdt = new Decimal(0);
-    let totalWorkingCapitalVes = new Decimal(0);
     let totalBoughtNetUsdt = new Decimal(0);
     let totalSoldUsdt = new Decimal(0);
 
     for (const row of computedRows) {
       totalFeesUsdt = totalFeesUsdt.plus(new Decimal(row.commissionUsdt));
-      totalWorkingCapitalUsdt = totalWorkingCapitalUsdt.plus(
-        new Decimal(row.amountUsdt)
-      );
-      totalWorkingCapitalVes = totalWorkingCapitalVes.plus(
-        new Decimal(row.totalPriceVes)
-      );
 
       if (row.tradeType === "BUY") {
         totalBoughtNetUsdt = totalBoughtNetUsdt.plus(
@@ -585,20 +624,13 @@ export class P2PAccountingService {
       }
     }
 
-    const periodMultiplier =
-      period === "TODAY"
-        ? new Decimal(1)
-        : period === "7D"
-          ? new Decimal("1")
-          : new Decimal("1");
+    const periodMultiplier = new Decimal(1);
 
     const scaledNetVes = totalNetVes.mul(periodMultiplier);
     const scaledTaxVes = totalTaxVes.mul(periodMultiplier);
     const scaledGrossVes = totalGrossVes.mul(periodMultiplier);
     const scaledExemptVes = totalExemptVes.mul(periodMultiplier);
     const scaledFeesUsdt = totalFeesUsdt.mul(periodMultiplier);
-    const scaledWorkingCapUsdt = totalWorkingCapitalUsdt.mul(periodMultiplier);
-    const scaledWorkingCapVes = totalWorkingCapitalVes.mul(periodMultiplier);
 
     const avgSpread =
       sellOrdersCount > 0
@@ -633,6 +665,8 @@ export class P2PAccountingService {
         ? scaledTaxVes.div(liveRate).toFixed(2)
         : "0.00",
       seniatTax16Ves: formatMoney(scaledTaxVes),
+      seniatTaxRatePercent: String(taxConfig.seniatTaxPercent),
+      makerFeeRatePercent: String(taxConfig.makerFeePercent),
       exemptCapitalUsdt: liveBuyRate.gt(0)
         ? formatMoney(scaledExemptVes.div(liveBuyRate))
         : "0.00",
@@ -642,18 +676,17 @@ export class P2PAccountingService {
       totalBinanceFeesUsdt: scaledFeesUsdt.toFixed(2),
       nextClosingTimeVet: "11:59 PM VET",
       lastSyncSecondsAgo: 2,
-      workingCapitalUsdt: formatMoney(scaledWorkingCapUsdt),
-      workingCapitalVes: formatMoney(scaledWorkingCapVes),
     };
   }
 
   /**
-   * Devuelve las órdenes paginadas y filtradas del usuario autenticado.
+   * Devuelve las órdenes paginadas y filtradas por tipo, banco y fecha del usuario autenticado.
    */
   public static async getPaginatedOrders(params: {
     readonly userId: string;
     readonly tradeType: TradeTypeFilter;
     readonly bank?: string;
+    readonly date?: string;
     readonly page: number;
     readonly limit: number;
   }): Promise<{
@@ -661,12 +694,65 @@ export class P2PAccountingService {
     readonly totalCount: number;
     readonly sellCount: number;
     readonly buyCount: number;
+    readonly availableDates: readonly string[];
   }> {
-    const rawOrders = await this.getUserOrdersFromVaultOrBinance(params.userId);
-    const allComputed = rawOrders.map(calculateOrderFiscalMetrics);
+    const [rawOrders, taxConfig] = await Promise.all([
+      this.getUserOrdersFromVaultOrBinance(params.userId),
+      SupabaseVaultRepository.getUserTaxConfig(params.userId),
+    ]);
+    const allComputed = rawOrders.map((o) =>
+      calculateOrderFiscalMetrics(o, taxConfig)
+    );
 
-    const sellCount = allComputed.filter((o) => o.tradeType === "SELL").length;
-    const buyCount = allComputed.filter((o) => o.tradeType === "BUY").length;
+    // Fecha actual en Venezuela (America/Caracas)
+    const todayVetStr = new Date().toLocaleDateString("es-VE", {
+      timeZone: "America/Caracas",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+
+    // Extraer fechas únicas disponibles en el historial (formato DD/MM/YYYY)
+    const dateSet = new Set<string>();
+    for (const ord of allComputed) {
+      const dt = ord.timeVetLabel.split("•")[0]?.trim();
+      if (dt && /^\d{2}\/\d{2}\/\d{4}$/.test(dt)) {
+        dateSet.add(dt);
+      }
+    }
+    const availableDates = Array.from(dateSet).sort((a, b) => {
+      const [da, ma, ya] = a.split("/").map(Number);
+      const [db, mb, yb] = b.split("/").map(Number);
+      return (
+        new Date(yb || 0, (mb || 1) - 1, db || 0).getTime() -
+        new Date(ya || 0, (ma || 1) - 1, da || 0).getTime()
+      );
+    });
+
+    // Formatear filtro de fecha si viene en YYYY-MM-DD o DD/MM/YYYY
+    let targetDate = "";
+    if (params.date === "ALL") {
+      targetDate = "";
+    } else if (params.date && params.date.trim() !== "") {
+      const trimmed = params.date.trim();
+      if (trimmed === "TODAY") {
+        targetDate = todayVetStr;
+      } else if (trimmed.includes("-")) {
+        const parts = trimmed.split("-");
+        if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
+          targetDate = `${parts[2].padStart(2, "0")}/${parts[1].padStart(2, "0")}/${parts[0]}`;
+        }
+      } else {
+        targetDate = trimmed;
+      }
+    } else {
+      // Si no se envía fecha, por defecto se enfoca en el ciclo de 24 horas de hoy
+      // Pero si hoy aún no tiene órdenes y hay órdenes previas, se selecciona la fecha más reciente
+      const hasTodayOrders = allComputed.some((o) =>
+        o.timeVetLabel.includes(todayVetStr)
+      );
+      targetDate = hasTodayOrders ? todayVetStr : (availableDates[0] ?? todayVetStr);
+    }
 
     const filtered = allComputed.filter((order) => {
       if (params.tradeType !== "ALL" && order.tradeType !== params.tradeType) {
@@ -679,8 +765,14 @@ export class P2PAccountingService {
       ) {
         return false;
       }
+      if (targetDate && !order.timeVetLabel.includes(targetDate)) {
+        return false;
+      }
       return true;
     });
+
+    const sellCount = filtered.filter((o) => o.tradeType === "SELL").length;
+    const buyCount = filtered.filter((o) => o.tradeType === "BUY").length;
 
     const startIndex = (params.page - 1) * params.limit;
     const pagedItems = filtered.slice(startIndex, startIndex + params.limit);
@@ -690,6 +782,7 @@ export class P2PAccountingService {
       totalCount: filtered.length,
       sellCount,
       buyCount,
+      availableDates,
     };
   }
 
@@ -808,5 +901,23 @@ export class P2PAccountingService {
     amount: number = 5000
   ): Promise<readonly BankLiveMonitorDto[]> {
     return BinanceP2PLiveService.getLiveBrechas(amount);
+  }
+
+  /**
+   * Obtiene la configuración de porcentajes impositivos y comisiones del usuario.
+   */
+  public static async getUserTaxConfig(userId: string) {
+    return SupabaseVaultRepository.getUserTaxConfig(userId);
+  }
+
+  /**
+   * Actualiza la configuración de porcentajes impositivos y comisiones del usuario.
+   */
+  public static async updateUserTaxConfig(
+    userId: string,
+    input: { seniatTaxPercent: number; makerFeePercent: number }
+  ) {
+    await SupabaseVaultRepository.saveUserTaxConfig(userId, input);
+    return SupabaseVaultRepository.getUserTaxConfig(userId);
   }
 }

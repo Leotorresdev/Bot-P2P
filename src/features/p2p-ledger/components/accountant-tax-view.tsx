@@ -15,6 +15,8 @@ import {
   FileText,
   BadgePercent,
   Landmark,
+  Calendar,
+  X,
 } from "lucide-react";
 import {
   useDailyClosingsQuery,
@@ -28,6 +30,7 @@ export function AccountantTaxView() {
   const closingsQuery = useDailyClosingsQuery();
   const summaryQuery = useP2PSummaryQuery("TODAY", "FIFO");
   const [filterType, setFilterType] = React.useState<TradeTypeFilter>("ALL");
+  const [dateFilter, setDateFilter] = React.useState<string>("");
   const [page, setPage] = React.useState<number>(1);
   const [expandedClosingId, setExpandedClosingId] = React.useState<
     string | null
@@ -36,6 +39,7 @@ export function AccountantTaxView() {
   const ordersQuery = useP2POrdersQuery({
     period: "TODAY",
     tradeType: filterType,
+    date: dateFilter || undefined,
     page,
   });
 
@@ -45,7 +49,10 @@ export function AccountantTaxView() {
   const orders = ordersQuery.data?.items ?? [];
 
   const handleDownloadExcel = () => {
-    window.location.href = "/api/p2p/export-csv";
+    const url = dateFilter
+      ? `/api/p2p/export-csv?date=${encodeURIComponent(dateFilter)}`
+      : "/api/p2p/export-csv";
+    window.location.href = url;
   };
 
   return (
@@ -84,13 +91,13 @@ export function AccountantTaxView() {
         </button>
       </div>
 
-      {/* 2. Cuadrícula de Resumen Impositivo del Mes (Noviembre) */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {/* Caja 1: Provisión Débito Fiscal IVA 16% */}
+      {/* 2. Cuadrícula de Resumen Impositivo del Mes */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {/* Caja 1: Provisión Débito Fiscal SENIAT */}
         <div className="flex flex-col justify-between gap-2 rounded-2xl border border-amber-200/90 bg-amber-50/60 p-5 shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-amber-900">
-              Provisión IVA (16%)
+              Provisión SENIAT ({summary?.seniatTaxRatePercent ?? "16"}%)
             </span>
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
               <BadgePercent className="h-4 w-4" />
@@ -105,34 +112,11 @@ export function AccountantTaxView() {
             </div>
           </div>
           <span className="text-[11px] font-medium text-amber-800/80">
-            Calculado estrictamente sobre el margen realizado
+            Calculado estrictamente sobre el margen comercial realizado
           </span>
         </div>
 
-        {/* Caja 2: Capital de Trabajo Rotado (Volumen Total Movilizado) */}
-        <div className="flex flex-col justify-between gap-2 rounded-2xl border border-blue-200/90 bg-blue-50/60 p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-blue-900">
-              Capital de Trabajo (Volumen)
-            </span>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
-              <Wallet className="h-4 w-4" />
-            </div>
-          </div>
-          <div>
-            <div className="font-display text-2xl font-extrabold tracking-tight text-blue-950">
-              ${summary?.workingCapitalUsdt ?? "0.00"}
-            </div>
-            <div className="text-xs font-bold text-blue-800">
-              {summary?.workingCapitalVes ?? "0.00"} Bs. movilizados
-            </div>
-          </div>
-          <span className="text-[11px] font-medium text-blue-700/80">
-            Volumen total de dinero movilizado en compras y ventas
-          </span>
-        </div>
-
-        {/* Caja 3: Margen Bruto Realizado (Base Imponible) */}
+        {/* Caja 2: Margen Bruto Realizado (Base Imponible) */}
         <div className="flex flex-col justify-between gap-2 rounded-2xl border border-emerald-200/90 bg-emerald-50/60 p-5 shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-emerald-900">
@@ -155,7 +139,7 @@ export function AccountantTaxView() {
           </span>
         </div>
 
-        {/* Caja 4: Ganancia Neta Realizada (84%) */}
+        {/* Caja 3: Ganancia Neta Realizada */}
         <div className="flex flex-col justify-between gap-2 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-700">
@@ -328,7 +312,7 @@ export function AccountantTaxView() {
                 Libro Diario de Conciliación Impositiva
               </h3>
               <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-extrabold text-emerald-700">
-                {orders.length} Comprobantes Hoy
+                {ordersQuery.data?.totalCount ?? orders.length} Comprobantes
               </span>
             </div>
             <p className="text-xs font-medium text-slate-500">
@@ -371,6 +355,97 @@ export function AccountantTaxView() {
           </div>
         </div>
 
+        {/* Selector y Filtros por Fecha (Contador) */}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200/60 bg-amber-50/40 p-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex items-center gap-2 rounded-lg border border-amber-300/80 bg-white px-3 py-1.5 shadow-xs">
+              <Calendar className="h-4 w-4 text-amber-700 shrink-0" />
+              <span className="text-xs font-bold text-amber-950">Fecha Fiscal:</span>
+              <input
+                type="date"
+                value={dateFilter}
+                onChange={(e) => {
+                  setDateFilter(e.target.value);
+                  setPage(1);
+                }}
+                className="bg-transparent text-xs font-semibold text-slate-800 focus:outline-none cursor-pointer"
+              />
+              {dateFilter && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDateFilter("");
+                    setPage(1);
+                  }}
+                  className="text-slate-400 hover:text-slate-600 transition-colors ml-1"
+                  title="Quitar filtro de fecha"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Chips rápidos de fechas disponibles */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setDateFilter("");
+                  setPage(1);
+                }}
+                className={cn(
+                  "rounded-lg px-2.5 py-1 text-xs font-bold transition-all",
+                  !dateFilter
+                    ? "bg-amber-900 text-white shadow-sm"
+                    : "border border-amber-200 bg-white text-amber-900 hover:border-amber-300 hover:bg-amber-50"
+                )}
+              >
+                Todas las Fechas
+              </button>
+
+              {ordersQuery.data?.availableDates?.map((dateStr) => {
+                const [d, m, y] = dateStr.split("/");
+                const isoDate = `${y}-${m}-${d}`;
+                const isSelected = dateFilter === isoDate || dateFilter === dateStr;
+
+                const nowVet = new Date();
+                const todayStr = nowVet.toLocaleDateString("es-VE", {
+                  timeZone: "America/Caracas",
+                  day: "2-digit",
+                  month: "2-digit",
+                  year: "numeric",
+                });
+                const isToday = dateStr === todayStr;
+
+                return (
+                  <button
+                    key={dateStr}
+                    type="button"
+                    onClick={() => {
+                      setDateFilter(isSelected ? "" : isoDate);
+                      setPage(1);
+                    }}
+                    className={cn(
+                      "rounded-lg px-2.5 py-1 text-xs font-bold transition-all flex items-center gap-1",
+                      isSelected
+                        ? "bg-amber-700 text-white shadow-sm"
+                        : "border border-amber-200 bg-white text-amber-900 hover:border-amber-300 hover:bg-amber-50"
+                    )}
+                  >
+                    {isToday ? `🟢 Hoy (${dateStr})` : `📅 ${dateStr}`}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {dateFilter && (
+            <span className="text-xs font-bold text-amber-900 bg-amber-100/90 border border-amber-300 px-2.5 py-1 rounded-lg">
+              Libro Diario del {dateFilter.includes("-") ? dateFilter.split("-").reverse().join("/") : dateFilter} ({ordersQuery.data?.totalCount ?? orders.length} registros)
+            </span>
+          )}
+        </div>
+
         {/* Tabla Contable Fiscal */}
         <div className="w-full overflow-x-auto">
           <div className="min-w-[1050px]">
@@ -397,10 +472,19 @@ export function AccountantTaxView() {
                     className="grid grid-cols-12 items-center rounded-xl border border-slate-200/70 bg-white px-4 py-3 text-xs"
                   >
                     {/* Comprobante / Hora */}
-                    <div className="col-span-2 flex flex-col gap-0.5">
-                      <span className="font-extrabold text-slate-900">
-                        {order.timeVetLabel}
-                      </span>
+                    <div className="col-span-2 flex flex-col gap-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-extrabold text-amber-900">
+                          {order.timeVetLabel.includes("•")
+                            ? order.timeVetLabel.split("•")[0]?.trim()
+                            : order.timeVetLabel}
+                        </span>
+                        {order.timeVetLabel.includes("•") && (
+                          <span className="text-[11px] font-semibold text-slate-500">
+                            {order.timeVetLabel.split("•")[1]?.trim()}
+                          </span>
+                        )}
+                      </div>
                       <span className="text-[11px] font-medium text-slate-400">
                         Orden #{order.orderNumber}
                       </span>

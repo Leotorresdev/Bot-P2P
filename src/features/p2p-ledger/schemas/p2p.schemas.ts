@@ -49,6 +49,7 @@ export const GetOrdersQuerySchema = z.object({
   period: PeriodFilterSchema,
   tradeType: TradeTypeFilterSchema,
   bank: z.string().trim().max(40).optional(),
+  date: z.string().trim().max(25).optional(),
   page: z.coerce.number().int().min(1).max(1000).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
@@ -155,6 +156,25 @@ export const TriggerDailyClosingSchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/, "Formato de fecha requerido: YYYY-MM-DD"),
 });
 
+export const UpdateTaxConfigSchema = z.object({
+  seniatTaxPercent: z.coerce
+    .number()
+    .min(0, "El porcentaje no puede ser negativo")
+    .max(99, "El porcentaje debe ser menor a 100%"),
+  makerFeePercent: z.coerce
+    .number()
+    .min(0, "La comisión no puede ser negativa")
+    .max(10, "La comisión debe ser menor a 10%")
+    .default(0.163),
+});
+export type UpdateTaxConfigInput = z.infer<typeof UpdateTaxConfigSchema>;
+
+export interface UserTaxConfigDto {
+  readonly seniatTaxPercent: number;
+  readonly makerFeePercent: number;
+  readonly updatedAt?: string;
+}
+
 // =========================================================
 // 3. CONTRATOS DE RESPUESTA TIPADOS (DTOs)
 // =========================================================
@@ -170,6 +190,8 @@ export interface PnlSummaryDto {
   readonly grossProfitVes: string;
   readonly seniatTax16Usdt: string;
   readonly seniatTax16Ves: string;
+  readonly seniatTaxRatePercent: string;
+  readonly makerFeeRatePercent: string;
   readonly exemptCapitalUsdt: string;
   readonly exemptCapitalVes: string;
   readonly currentWacCostVes: string;
@@ -177,8 +199,8 @@ export interface PnlSummaryDto {
   readonly totalBinanceFeesUsdt: string;
   readonly nextClosingTimeVet: string;
   readonly lastSyncSecondsAgo: number;
-  readonly workingCapitalUsdt: string;
-  readonly workingCapitalVes: string;
+  readonly workingCapitalUsdt?: string;
+  readonly workingCapitalVes?: string;
 }
 
 export interface BankLiveMonitorDto {
@@ -214,6 +236,8 @@ export interface P2POrderRowDto {
   readonly exemptCapitalVes: string;
   readonly seniatTax16Ves: string;
   readonly seniatTax16Usdt: string;
+  readonly seniatTaxPercentApplied?: string;
+  readonly makerFeePercentApplied?: string;
   readonly netFreeProfitUsdt: string;
   readonly netFreeProfitVes: string;
   readonly marginPercent: string;
