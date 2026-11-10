@@ -277,7 +277,8 @@ export class SupabaseVaultRepository {
         .from("p2p_orders")
         .select("*")
         .eq("user_id", userId)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .limit(1000);
 
       if (!error && data && data.length > 0) {
         return data.map((row) => ({
@@ -313,21 +314,24 @@ export class SupabaseVaultRepository {
     if (orders.length === 0) return;
 
     try {
-      await supabase.from("p2p_orders").upsert(
-        orders.map((o) => ({
-          order_number: o.orderNumber,
-          user_id: userId,
-          time_vet_label: o.timeVetLabel,
-          trade_type: o.tradeType,
-          advertisement_role: o.advertisementRole,
-          pay_method_name: o.payMethodName,
-          counter_part_nick_name: o.counterPartNickName,
-          amount_usdt: o.amountUsdt,
-          commission_usdt: o.commissionUsdt,
-          unit_price_ves: o.unitPriceVes,
-          cost_basis_rate_ves: o.costBasisRateVes,
-        }))
-      );
+      const payload = orders.map((o) => ({
+        order_number: o.orderNumber,
+        user_id: userId,
+        time_vet_label: o.timeVetLabel,
+        trade_type: o.tradeType,
+        advertisement_role: o.advertisementRole,
+        pay_method_name: o.payMethodName,
+        counter_part_nick_name: o.counterPartNickName,
+        amount_usdt: o.amountUsdt,
+        commission_usdt: o.commissionUsdt,
+        unit_price_ves: o.unitPriceVes,
+        cost_basis_rate_ves: o.costBasisRateVes,
+      }));
+
+      for (let i = 0; i < payload.length; i += 50) {
+        const chunk = payload.slice(i, i + 50);
+        await supabase.from("p2p_orders").upsert(chunk);
+      }
     } catch {
       // Fallback
     }

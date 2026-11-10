@@ -179,49 +179,94 @@ const BINANCE_HOSTS = [
 async function fetchBinanceOrdersBySide(
   apiKey: string,
   apiSecret: string,
-  tradeType: "BUY" | "SELL"
+  tradeType: "BUY" | "SELL",
+  maxPages: number = 8
 ): Promise<{ success: boolean; data: BinanceC2COrderItem[]; error?: string }> {
+  // Inicio de hoy en Venezuela (America/Caracas, UTC-4)
+  const now = new Date();
+  const vetOffsetMs = 4 * 60 * 60 * 1000;
+  const vetNow = new Date(now.getTime() - vetOffsetMs);
+  const startOfDayVet = new Date(
+    Date.UTC(
+      vetNow.getUTCFullYear(),
+      vetNow.getUTCMonth(),
+      vetNow.getUTCDate(),
+      4, // 00:00:00 VET = 04:00:00 UTC
+      0,
+      0,
+      0
+    )
+  );
+  const startTimestamp = startOfDayVet.getTime();
+
   let lastError = "";
 
   for (const host of BINANCE_HOSTS) {
     try {
-      const timestamp = Date.now();
-      // Parámetro tradeType es OBLIGATORIO en Binance SAPI C2C. recvWindow=60000 previene desincronización de reloj.
-      const queryString = `tradeType=${tradeType}&timestamp=${timestamp}&recvWindow=60000&rows=100`;
-      const signature = signBinanceQuery(queryString, apiSecret);
+      const allHostOrders: BinanceC2COrderItem[] = [];
+      let page = 1;
+      let hostSuccess = false;
 
-      const res = await fetch(
-        `${host}/sapi/v1/c2c/orderMatch/listUserOrderHistory?${queryString}&signature=${signature}`,
-        {
-          method: "GET",
-          headers: {
-            "X-MBX-APIKEY": apiKey,
-          },
-          signal: AbortSignal.timeout(12000),
+      while (page <= maxPages) {
+        const timestamp = Date.now();
+        // Parámetro tradeType es OBLIGATORIO en Binance SAPI C2C. recvWindow=60000 previene desincronización de reloj.
+        const queryString = `tradeType=${tradeType}&timestamp=${timestamp}&recvWindow=60000&rows=100&page=${page}&startTimestamp=${startTimestamp}`;
+        const signature = signBinanceQuery(queryString, apiSecret);
+
+        const res = await fetch(
+          `${host}/sapi/v1/c2c/orderMatch/listUserOrderHistory?${queryString}&signature=${signature}`,
+          {
+            method: "GET",
+            headers: {
+              "X-MBX-APIKEY": apiKey,
+            },
+            signal: AbortSignal.timeout(12000),
+          }
+        );
+
+        const json = (await res.json()) as {
+          code: string | number;
+          message?: string;
+          msg?: string;
+          data?: BinanceC2COrderItem[];
+          total?: number;
+          success?: boolean;
+        };
+
+        if (
+          res.ok &&
+          (json.code === "000000" || json.code === 0 || json.code === "0")
+        ) {
+          hostSuccess = true;
+          const items = Array.isArray(json.data) ? json.data : [];
+          allHostOrders.push(...items);
+
+          // Si devolvió menos de 50 o ya no hay más datos, salimos de la paginación
+          if (items.length < 50) {
+            break;
+          }
+          page++;
+        } else {
+          lastError = json.message || json.msg || `HTTP ${res.status}`;
+          break;
         }
-      );
+      }
 
-      const json = (await res.json()) as {
-        code: string | number;
-        message?: string;
-        msg?: string;
-        data?: BinanceC2COrderItem[];
-        total?: number;
-        success?: boolean;
-      };
-
-      if (res.ok && (json.code === "000000" || json.code === 0 || json.code === "0")) {
+      if (hostSuccess) {
         return {
           success: true,
-          data: Array.isArray(json.data) ? json.data : [],
+          data: allHostOrders,
         };
       }
 
-      lastError = json.message || json.msg || `HTTP ${res.status}`;
       console.warn(`[Binance SAPI C2C] Host ${host} respondió:`, lastError);
 
       // Si no es un problema de red o geo-bloqueo, no seguimos rotando
-      if (json.code === -2008 || json.code === -2014 || json.code === -1022) {
+      if (
+        lastError.includes("-2008") ||
+        lastError.includes("-2014") ||
+        lastError.includes("-1022")
+      ) {
         break;
       }
     } catch (err) {
