@@ -39,7 +39,9 @@ export function useP2PSummaryQuery(period: PeriodFilter, method: LotMethod) {
       const json = await res.json();
       return json.data;
     },
-    refetchInterval: 15_000, // Sincronización en vivo cada 15s
+    refetchInterval: 8_000, // Sincronización en vivo cada 8s
+    refetchIntervalInBackground: true, // Sigue sincronizando en segundo plano / otra pestaña
+    refetchOnWindowFocus: true, // Refresco inmediato al volver a la pestaña
   });
 }
 
@@ -62,7 +64,9 @@ export function useVenezuelanBanksQuery(
       const json = await res.json();
       return json.data;
     },
-    refetchInterval: 12_000,
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -90,7 +94,9 @@ export function useP2POrdersQuery(params: {
       const json = await res.json();
       return json.data;
     },
-    refetchInterval: 15_000, // Sincronización continua de órdenes
+    refetchInterval: 8_000, // Sincronización continua de órdenes cada 8s
+    refetchIntervalInBackground: true, // Mantiene la captura en vivo en segundo plano
+    refetchOnWindowFocus: true, // Captura órdenes de inmediato al reenfocar la ventana
   });
 }
 

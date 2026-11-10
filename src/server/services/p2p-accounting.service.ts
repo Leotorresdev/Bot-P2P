@@ -234,6 +234,11 @@ async function fetchBinanceOrdersBySide(
 }
 
 export class P2PAccountingService {
+  private static readonly lastSyncTimestampByUser = new Map<string, number>();
+  private static readonly inFlightSyncByUser = new Map<
+    string,
+    Promise<readonly RawCompletedOrderInput[]>
+  >();
   /**
    * Prueba en vivo si las credenciales conectadas a la Bóveda responden con éxito en Binance SAPI.
    */
@@ -327,7 +332,8 @@ export class P2PAccountingService {
       }
 
       // Sincronizar órdenes inmediatamente
-      const synced = await this.getUserOrdersFromVaultOrBinance(userId);
+      this.lastSyncTimestampByUser.delete(userId);
+      const synced = await this.getUserOrdersFromVaultOrBinance(userId, true);
 
       return {
         success: true,
@@ -350,12 +356,32 @@ export class P2PAccountingService {
    * Si no tiene llaves o aún no ha operado, devuelve su lista real en base de datos.
    */
   public static async getUserOrdersFromVaultOrBinance(
-    userId: string
+    userId: string,
+    forceFresh: boolean = false
   ): Promise<readonly RawCompletedOrderInput[]> {
     const credential =
       await SupabaseVaultRepository.getBinanceCredential(userId);
 
-    if (credential) {
+    if (!credential) {
+      return SupabaseVaultRepository.getUserOrders(userId);
+    }
+
+    const now = Date.now();
+    const lastSync = this.lastSyncTimestampByUser.get(userId) ?? 0;
+
+    // Si se sincronizó hace menos de 6 segundos y no se solicita refresco forzado,
+    // leemos directo de la base de datos para responder de forma ultrarrápida y no saturar Binance
+    if (!forceFresh && now - lastSync < 6000) {
+      return SupabaseVaultRepository.getUserOrders(userId);
+    }
+
+    // Si ya existe una sincronización en curso para este usuario (por ejemplo, /summary y /orders concurrentes)
+    const activePromise = this.inFlightSyncByUser.get(userId);
+    if (activePromise) {
+      return activePromise;
+    }
+
+    const syncPromise = (async () => {
       try {
         const { apiKey, apiSecret } = decryptBinanceCredentials(
           credential.apiKeyEncrypted,
@@ -437,6 +463,7 @@ export class P2PAccountingService {
               userId,
               syncedRecords
             );
+            P2PAccountingService.lastSyncTimestampByUser.set(userId, Date.now());
             return syncedRecords;
           }
         }
@@ -445,10 +472,15 @@ export class P2PAccountingService {
           "[P2PAccountingService] Error en sincronización con Binance:",
           err
         );
+      } finally {
+        P2PAccountingService.inFlightSyncByUser.delete(userId);
       }
-    }
 
-    return SupabaseVaultRepository.getUserOrders(userId);
+      return SupabaseVaultRepository.getUserOrders(userId);
+    })();
+
+    this.inFlightSyncByUser.set(userId, syncPromise);
+    return syncPromise;
   }
 
   /**
