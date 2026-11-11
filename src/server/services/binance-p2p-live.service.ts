@@ -1,4 +1,5 @@
 import "server-only";
+import { getUtcMinus4Parts } from "@/lib/timezone-utc4";
 import {
   HourlyCandlesRepository,
   getVenezuelaHourBucket,
@@ -125,33 +126,13 @@ function getVenezuelaDateAndHour(epochSec: number): {
   readonly nextDateIso: string;
   readonly hourOfDay: number;
 } {
-  const date = new Date(epochSec * 1000);
-  const nextDayDate = new Date((epochSec + 86_400) * 1000);
-
-  const dateIso = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Caracas",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
-
-  const nextDateIso = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Caracas",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(nextDayDate);
-
-  const hourStr = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Caracas",
-    hour: "numeric",
-    hourCycle: "h23",
-  }).format(date);
+  const current = getUtcMinus4Parts(epochSec);
+  const next = getUtcMinus4Parts(epochSec + 86_400);
 
   return {
-    dateIso,
-    nextDateIso,
-    hourOfDay: Number(hourStr) || 0,
+    dateIso: current.dateIso,
+    nextDateIso: next.dateIso,
+    hourOfDay: current.hour,
   };
 }
 
@@ -628,8 +609,8 @@ export class BinanceP2PLiveService {
       currentSpreadPct,
       isLive: targetBank?.isLiveApi ?? true,
       benchmarkSource: targetBank?.isLiveApi
-        ? "Binance P2P C2C • Velas 1H (24/7 Hora Venezuela)"
-        : "CriptoYa API • Velas 1H (24/7 Hora Venezuela)",
+        ? "Binance P2P C2C • Velas 1H (-4:00 UTC)"
+        : "CriptoYa API • Velas 1H (-4:00 UTC)",
     };
   }
 }

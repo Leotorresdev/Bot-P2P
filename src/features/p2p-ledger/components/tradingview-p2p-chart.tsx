@@ -23,6 +23,10 @@ import {
 } from "lucide-react";
 import { useP2PChartDataQuery } from "@/features/p2p-ledger/api/use-p2p-queries";
 import type { ChartTimeframe } from "@/features/p2p-ledger/schemas/p2p.schemas";
+import {
+  UTC_MINUS_4_OFFSET_SECONDS,
+  extractPartsFromShiftedUtcDate,
+} from "@/lib/timezone-utc4";
 import { cn } from "@/lib/utils";
 
 interface TradingViewP2PChartProps {
@@ -32,27 +36,29 @@ interface TradingViewP2PChartProps {
   readonly compact?: boolean;
 }
 
-const vetHourFormatter = new Intl.DateTimeFormat("es-VE", {
-  timeZone: "America/Caracas",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-});
+const MONTH_LABELS_ES = [
+  "ene",
+  "feb",
+  "mar",
+  "abr",
+  "may",
+  "jun",
+  "jul",
+  "ago",
+  "sep",
+  "oct",
+  "nov",
+  "dic",
+] as const;
 
-const vetDayFormatter = new Intl.DateTimeFormat("es-VE", {
-  timeZone: "America/Caracas",
-  day: "2-digit",
-  month: "short",
-});
-
-const vetCrosshairFormatter = new Intl.DateTimeFormat("es-VE", {
-  timeZone: "America/Caracas",
-  day: "2-digit",
-  month: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-});
+/**
+ * Lightweight Charts calcula cambios de día/mes/año e intervalos horarios en UTC.
+ * Desplazamos cada marca Unix -4 horas (-14400s) para que la medianoche y cada
+ * vela horaria coincidan exactamente con -4:00 UTC en ejes y crosshair.
+ */
+function toChartUtcMinus4Time(utcSeconds: number): Time {
+  return (utcSeconds + UTC_MINUS_4_OFFSET_SECONDS) as Time;
+}
 
 function timeToDate(time: Time): Date {
   if (typeof time === "number") {
@@ -62,6 +68,27 @@ function timeToDate(time: Time): Date {
     return new Date(time);
   }
   return new Date(Date.UTC(time.year, time.month - 1, time.day));
+}
+
+function formatShiftedTickMark(d: Date, tickMarkType: TickMarkType): string {
+  const parts = extractPartsFromShiftedUtcDate(d);
+  if (tickMarkType === TickMarkType.Year) {
+    return String(parts.year);
+  }
+  if (
+    tickMarkType === TickMarkType.DayOfMonth ||
+    tickMarkType === TickMarkType.Month
+  ) {
+    const dayStr = String(parts.day).padStart(2, "0");
+    const monthLabel = MONTH_LABELS_ES[parts.month - 1] ?? "";
+    return `${dayStr} ${monthLabel}`;
+  }
+  return parts.hhMm;
+}
+
+function formatShiftedCrosshairTime(d: Date): string {
+  const parts = extractPartsFromShiftedUtcDate(d);
+  return `${parts.ddMm} ${parts.hhMm} (-4:00 UTC)`;
 }
 
 export function TradingViewP2PChart({
@@ -142,22 +169,13 @@ export function TradingViewP2PChart({
         secondsVisible: false,
         fixLeftEdge: true,
         fixRightEdge: true,
-        tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) => {
-          const d = timeToDate(time);
-          if (
-            tickMarkType === TickMarkType.DayOfMonth ||
-            tickMarkType === TickMarkType.Month ||
-            tickMarkType === TickMarkType.Year
-          ) {
-            return vetDayFormatter.format(d);
-          }
-          return vetHourFormatter.format(d);
-        },
+        tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) =>
+          formatShiftedTickMark(timeToDate(time), tickMarkType),
       },
       localization: {
         priceFormatter: (p: number) => `${p.toFixed(2)} Bs.`,
         timeFormatter: (time: Time) =>
-          `${vetCrosshairFormatter.format(timeToDate(time))} VET`,
+          formatShiftedCrosshairTime(timeToDate(time)),
       },
     });
 
@@ -237,7 +255,7 @@ export function TradingViewP2PChart({
     if (chartMode === "CANDLES") {
       if (candleSeriesRef.current && chartData.candles.length > 0) {
         const mappedCandles = chartData.candles.map((cd) => ({
-          time: cd.time as Time,
+          time: toChartUtcMinus4Time(cd.time),
           open: cd.open,
           high: cd.high,
           low: cd.low,
@@ -249,7 +267,7 @@ export function TradingViewP2PChart({
       if (sellSeriesRef.current && chartData.sellPoints.length > 0) {
         sellSeriesRef.current.setData(
           chartData.sellPoints.map((pt) => ({
-            time: pt.time as Time,
+            time: toChartUtcMinus4Time(pt.time),
             value: pt.value,
           }))
         );
@@ -258,7 +276,7 @@ export function TradingViewP2PChart({
       if (buySeriesRef.current && chartData.buyPoints.length > 0) {
         buySeriesRef.current.setData(
           chartData.buyPoints.map((pt) => ({
-            time: pt.time as Time,
+            time: toChartUtcMinus4Time(pt.time),
             value: pt.value,
           }))
         );
@@ -288,7 +306,7 @@ export function TradingViewP2PChart({
               {effectiveBank}
             </span>
             <span className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-extrabold text-slate-700">
-              Velas 1H • 24/7 VET
+              Velas 1H • -4:00 UTC
             </span>
           </div>
 
@@ -355,7 +373,7 @@ export function TradingViewP2PChart({
           {/* Selector de Ventana Horaria (Todas las velas son estrictamente de 1H) */}
           <div
             className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 shadow-2xs"
-            title="Ventana de historial (cada vela = 1 hora exacta en Venezuela)"
+            title="Ventana de historial (cada vela = 1 hora exacta en -4:00 UTC)"
           >
             {(
               [
@@ -401,20 +419,20 @@ export function TradingViewP2PChart({
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 backdrop-blur-xs">
             <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
-              <span>Cargando velas horarias 24/7 (VET)...</span>
+              <span>Cargando velas horarias 24/7 (-4:00 UTC)...</span>
             </div>
           </div>
         )}
         <div ref={chartContainerRef} className="w-full" />
       </div>
 
-      {/* Pie de Gráfica: Hora Venezuela 24/7 */}
+      {/* Pie de Gráfica: Horario fijo -4:00 UTC 24/7 */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-slate-50/50 px-4 py-1.5 text-[10px] text-slate-500">
         <div className="flex items-center gap-1.5">
           <Sparkles className="h-3 w-3 text-emerald-500" />
           <span>
             {chartData?.benchmarkSource ??
-              "Binance P2P C2C • Velas 1H (24/7 Hora Venezuela)"}
+              "Binance P2P C2C • Velas 1H (-4:00 UTC)"}
           </span>
         </div>
         <div className="flex items-center gap-3">

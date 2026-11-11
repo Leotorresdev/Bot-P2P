@@ -2,6 +2,7 @@ import "server-only";
 import fs from "node:fs";
 import path from "node:path";
 import { supabase } from "@/lib/supabase";
+import { getUtcMinus4Parts } from "@/lib/timezone-utc4";
 
 export interface StoredHourlyCandleRecord {
   readonly bankName: string;
@@ -53,9 +54,9 @@ function makeKey(bankName: string, hourBucketUtc: number): string {
 }
 
 /**
- * Calcula la hora exacta truncada en horario de Venezuela (America/Caracas, UTC-4).
- * Dado que Venezuela no tiene horario de verano (UTC-4 fijo), cada hora UTC exacta
- * coincide exactamente con una hora en punto en Venezuela (00:00 .. 23:00 VET).
+ * Calcula la hora exacta truncada en horario fijo -4:00 UTC (Venezuela / VET).
+ * Al ser -4:00 un múltiplo exacto de 3600s sin horario de verano, cada hora UTC
+ * coincide exactamente con una hora en punto en -4:00 UTC (00:00 .. 23:00).
  */
 export function getVenezuelaHourBucket(nowMs: number = Date.now()): {
   readonly hourBucketUtc: number;
@@ -63,26 +64,12 @@ export function getVenezuelaHourBucket(nowMs: number = Date.now()): {
   readonly shortHourVet: string;
 } {
   const hourBucketUtc = Math.floor(nowMs / 3_600_000) * 3600;
-  const bucketDate = new Date(hourBucketUtc * 1000);
-
-  const datePart = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Caracas",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(bucketDate);
-
-  const timePart = new Intl.DateTimeFormat("es-VE", {
-    timeZone: "America/Caracas",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(bucketDate);
+  const parts = getUtcMinus4Parts(hourBucketUtc);
 
   return {
     hourBucketUtc,
-    hourLabelVet: `${datePart} ${timePart} VET`,
-    shortHourVet: `${timePart} VET`,
+    hourLabelVet: `${parts.dateIso} ${parts.hhMm} (-4:00 UTC)`,
+    shortHourVet: `${parts.hhMm} (-4:00 UTC)`,
   };
 }
 
