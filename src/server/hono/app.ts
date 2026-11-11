@@ -10,6 +10,7 @@ import { env } from "@/env";
 import { auth } from "@/server/auth/better-auth";
 import {
   GetBanksQuerySchema,
+  GetChartDataQuerySchema,
   GetOrdersQuerySchema,
   GetSummaryQuerySchema,
   LoginCredentialsSchema,
@@ -411,6 +412,18 @@ export const routes = baseApp
         effectiveSellAmount
       );
       return c.json({ data: banks }, 200);
+    }
+  )
+  .get(
+    "/p2p/chart-data",
+    zValidator("query", GetChartDataQuerySchema),
+    async (c) => {
+      const { bank, timeframe } = c.req.valid("query");
+      const chartData = await BinanceP2PLiveService.getBankChartData(
+        bank,
+        timeframe
+      );
+      return c.json({ data: chartData }, 200);
     }
   )
   .post("/p2p/sync-binance", async (c) => {

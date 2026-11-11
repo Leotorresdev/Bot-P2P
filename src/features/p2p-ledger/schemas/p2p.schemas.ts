@@ -260,3 +260,39 @@ export interface DailyClosingActaDto {
   readonly netFreeProfitVes: string;
   readonly integrityHashSha256: string;
 }
+
+export const ChartTimeframeSchema = z.enum(["LIVE", "1H", "24H"]).default("24H");
+export type ChartTimeframe = z.infer<typeof ChartTimeframeSchema>;
+
+export const GetChartDataQuerySchema = z.object({
+  bank: z.string().trim().default("Banesco"),
+  timeframe: ChartTimeframeSchema,
+});
+export type GetChartDataQueryInput = z.infer<typeof GetChartDataQuerySchema>;
+
+export interface ChartPointDto {
+  readonly time: number;
+  readonly value: number;
+}
+
+export interface ChartCandleDto {
+  readonly time: number;
+  readonly open: number;
+  readonly high: number;
+  readonly low: number;
+  readonly close: number;
+}
+
+export interface BankChartDataDto {
+  readonly bankName: string;
+  readonly timeframe: ChartTimeframe;
+  readonly sellPoints: readonly ChartPointDto[];
+  readonly buyPoints: readonly ChartPointDto[];
+  readonly candles: readonly ChartCandleDto[];
+  readonly currentSellRate: number;
+  readonly currentBuyRate: number;
+  readonly currentSpreadPct: number;
+  readonly isLive: boolean;
+  readonly benchmarkSource: string;
+}
+

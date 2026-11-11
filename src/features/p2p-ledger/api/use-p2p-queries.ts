@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/hono-client";
 import type {
+  ChartTimeframe,
   LoginCredentialsInput,
   LotMethod,
   PeriodFilter,
@@ -18,6 +19,8 @@ export const p2pQueryKeys = {
     [...p2pQueryKeys.all, "summary", { period, method }] as const,
   banks: (buyAmount?: number, sellAmount?: number) =>
     [...p2pQueryKeys.all, "banks", { buyAmount, sellAmount }] as const,
+  chart: (bank: string, timeframe: ChartTimeframe) =>
+    [...p2pQueryKeys.all, "chart", { bank, timeframe }] as const,
   orders: (filters: {
     period: PeriodFilter;
     tradeType: TradeTypeFilter;
@@ -63,6 +66,28 @@ export function useVenezuelanBanksQuery(
       });
       if (!res.ok) {
         throw new Error("Error consultando el monitor de brechas P2P.");
+      }
+      const json = await res.json();
+      return json.data;
+    },
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function useP2PChartDataQuery(bank: string = "Banesco", timeframe: ChartTimeframe = "24H") {
+  return useQuery({
+    queryKey: p2pQueryKeys.chart(bank, timeframe),
+    queryFn: async () => {
+      const res = await apiClient.api.p2p["chart-data"].$get({
+        query: {
+          bank,
+          timeframe,
+        },
+      });
+      if (!res.ok) {
+        throw new Error("No se pudo cargar la serie histórica de la gráfica.");
       }
       const json = await res.json();
       return json.data;
