@@ -1,4 +1,9 @@
 import "server-only";
+import {
+  HourlyCandlesRepository,
+  getVenezuelaHourBucket,
+  type StoredHourlyCandleRecord,
+} from "@/server/db/hourly-candles.repository";
 import type {
   BankLiveMonitorDto,
   VenezuelanBank,
@@ -39,7 +44,15 @@ interface CriptoYaP2PResponse {
   time: number;
 }
 
+interface YadioHistItem {
+  date: string; // Formato MM/DD/YYYY
+  rate: number;
+}
+
 let cachedCriptoYa: { data: CriptoYaP2PResponse; timestamp: number } | null = null;
+let cachedYadioHist: { ratesByIsoDate: Map<string, number>; timestamp: number } | null = null;
+let lastCandleWriteAt = 0;
+let lastRecordedHourBucket = 0;
 
 async function fetchCriptoYaP2P(): Promise<CriptoYaP2PResponse | null> {
   const now = Date.now();
@@ -63,6 +76,83 @@ async function fetchCriptoYaP2P(): Promise<CriptoYaP2PResponse | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Descarga las tasas diarias reales históricas de VES desde Yadio (últimos 24 días)
+ * para anclar horas históricas previas si el recolector 24/7 aún no tenía registros guardados.
+ */
+async function fetchYadioHistoricalRates(): Promise<Map<string, number>> {
+  const now = Date.now();
+  if (cachedYadioHist && now - cachedYadioHist.timestamp < 30 * 60_000) {
+    return cachedYadioHist.ratesByIsoDate;
+  }
+
+  const ratesMap = new Map<string, number>();
+  try {
+    const res = await fetch("https://api.yadio.io/hist/24/VES", {
+      headers: { "User-Agent": "BotP2P-Venezuela/2.4" },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (res.ok) {
+      const json = (await res.json()) as YadioHistItem[];
+      for (const item of json) {
+        if (!item?.date || typeof item.rate !== "number" || item.rate <= 0) continue;
+        const parts = item.date.split("/");
+        if (parts.length === 3) {
+          const [mm, dd, yyyy] = parts;
+          if (mm && dd && yyyy) {
+            const iso = `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+            ratesMap.set(iso, item.rate);
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignorar error de red y usar último caché disponible
+  }
+
+  if (ratesMap.size > 0) {
+    cachedYadioHist = { ratesByIsoDate: ratesMap, timestamp: now };
+    return ratesMap;
+  }
+
+  return cachedYadioHist?.ratesByIsoDate ?? ratesMap;
+}
+
+function getVenezuelaDateAndHour(epochSec: number): {
+  readonly dateIso: string;
+  readonly nextDateIso: string;
+  readonly hourOfDay: number;
+} {
+  const date = new Date(epochSec * 1000);
+  const nextDayDate = new Date((epochSec + 86_400) * 1000);
+
+  const dateIso = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Caracas",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+
+  const nextDateIso = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Caracas",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(nextDayDate);
+
+  const hourStr = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Caracas",
+    hour: "numeric",
+    hourCycle: "h23",
+  }).format(date);
+
+  return {
+    dateIso,
+    nextDateIso,
+    hourOfDay: Number(hourStr) || 0,
+  };
 }
 
 interface CachedBrechasEntry {
@@ -325,89 +415,211 @@ export class BinanceP2PLiveService {
       data: results,
     });
 
+    // Registrar muestra en la vela horaria actual (throttled a 45s o cambio de hora)
+    if (cleanBuyAmount === 100_000 && cleanSellAmount === 100_000) {
+      void this.recordHourlySamplesFromBrechas(results, false);
+    }
+
     return results;
   }
 
   /**
-   * Obtiene la serie histórica de precios y velas (OHLC) para TradingView Lightweight Charts
-   * calibrada a la cotización en vivo del banco seleccionado en Venezuela.
+   * Persiste una muestra de mercado en la vela de 1H correspondiente a la hora exacta
+   * en Venezuela (America/Caracas). Crea una vela nueva automáticamente al iniciar cada hora.
+   */
+  public static async recordHourlySamplesFromBrechas(
+    brechas: readonly BankLiveMonitorDto[],
+    force: boolean = false
+  ): Promise<readonly StoredHourlyCandleRecord[]> {
+    const nowMs = Date.now();
+    const { hourBucketUtc } = getVenezuelaHourBucket(nowMs);
+
+    if (
+      !force &&
+      hourBucketUtc === lastRecordedHourBucket &&
+      nowMs - lastCandleWriteAt < 45_000
+    ) {
+      return [];
+    }
+
+    lastRecordedHourBucket = hourBucketUtc;
+    lastCandleWriteAt = nowMs;
+
+    const samples = brechas
+      .filter((b) => b.isLiveApi)
+      .map((b) => ({
+        bankName: b.bankName,
+        sellPrice: parseFloat(b.sellRate2nd),
+        buyPrice: parseFloat(b.buyRate2nd),
+      }))
+      .filter((s) => !isNaN(s.sellPrice) && !isNaN(s.buyPrice) && s.sellPrice > 0);
+
+    // Si Binance C2C falló temporalmente para todos, intentar guardar con el benchmark actual
+    const finalSamples =
+      samples.length > 0
+        ? samples
+        : brechas.map((b) => ({
+            bankName: b.bankName,
+            sellPrice: parseFloat(b.sellRate2nd) || 1075,
+            buyPrice: parseFloat(b.buyRate2nd) || 1070,
+          }));
+
+    return HourlyCandlesRepository.upsertHourlySamples(finalSamples, nowMs);
+  }
+
+  /**
+   * Punto de entrada para Cron 24/7 (Supabase pg_cron / Vercel / Monitor interno):
+   * Consulta tasas reales de los 7 bancos y actualiza la vela horaria en curso.
+   */
+  public static async collectHourlyCandlesSnapshot(): Promise<{
+    readonly ok: boolean;
+    readonly hourLabelVet: string;
+    readonly hourBucketUtc: number;
+    readonly banksUpdated: number;
+  }> {
+    const nowMs = Date.now();
+    const { hourBucketUtc, hourLabelVet } = getVenezuelaHourBucket(nowMs);
+    const brechas = await this.getLiveBrechas(100_000, 100_000);
+    const updated = await this.recordHourlySamplesFromBrechas(brechas, true);
+
+    return {
+      ok: true,
+      hourLabelVet,
+      hourBucketUtc,
+      banksUpdated: updated.length,
+    };
+  }
+
+  /**
+   * Obtiene velas exclusivamente de 1 HORA (24/7 en horario de Venezuela UTC-4).
+   * Combina velas reales persistidas (Supabase / disco) y rellena huecos históricos
+   * previos usando las tasas históricas reales de Yadio VES ancladas al banco.
    */
   public static async getBankChartData(
     bankName: string = "Banesco",
     timeframe: ChartTimeframe = "24H"
   ): Promise<BankChartDataDto> {
-    const brechas = await this.getLiveBrechas(100_000, 100_000);
+    const nowMs = Date.now();
+    const { hourBucketUtc: currentHourBucket, shortHourVet } =
+      getVenezuelaHourBucket(nowMs);
+
+    const [brechas, yadioRates] = await Promise.all([
+      this.getLiveBrechas(100_000, 100_000),
+      fetchYadioHistoricalRates(),
+    ]);
+
     const targetBank =
       brechas.find((b) => b.bankName.toLowerCase() === bankName.toLowerCase()) ??
       brechas[0];
 
-    const currentSellRate = targetBank ? parseFloat(targetBank.sellRate2nd) : 1085.0;
-    const currentBuyRate = targetBank ? parseFloat(targetBank.buyRate2nd) : 1079.2;
+    const resolvedBankName = targetBank?.bankName ?? "Banesco";
+    const currentSellRate = targetBank ? parseFloat(targetBank.sellRate2nd) : 1075.0;
+    const currentBuyRate = targetBank ? parseFloat(targetBank.buyRate2nd) : 1070.0;
     const currentSpreadPct =
       currentBuyRate > 0
         ? Number((((currentSellRate - currentBuyRate) / currentBuyRate) * 100).toFixed(2))
-        : 0.54;
+        : 0.47;
 
-    const nowSeconds = Math.floor(Date.now() / 1000);
+    // Asegurar que la vela de la hora venezolana en curso quede actualizada de inmediato
+    await this.recordHourlySamplesFromBrechas(brechas, false);
 
-    let count: number;
-    let stepSeconds: number;
+    let hoursCount = 24;
+    if (timeframe === "72H") hoursCount = 72;
+    else if (timeframe === "7D") hoursCount = 168;
 
-    switch (timeframe) {
-      case "LIVE":
-        count = 30; // 30 ticks cada 10 segundos
-        stepSeconds = 10;
-        break;
-      case "1H":
-        count = 60; // 60 minutos
-        stepSeconds = 60;
-        break;
-      case "24H":
-      default:
-        count = 24; // 24 horas
-        stepSeconds = 3600;
-        break;
-    }
+    const fromBucket = currentHourBucket - (hoursCount - 1) * 3600;
+    const storedByBucket = await HourlyCandlesRepository.getHourlyCandlesRange(
+      resolvedBankName,
+      fromBucket,
+      currentHourBucket
+    );
+
+    // Calcular relación real entre el precio del banco hoy y el promedio Yadio de hoy
+    const { dateIso: todayVetIso } = getVenezuelaDateAndHour(currentHourBucket);
+    const yadioTodayRate =
+      yadioRates.get(todayVetIso) ??
+      Array.from(yadioRates.values())[0] ??
+      currentSellRate;
+    const bankPremiumRatio =
+      yadioTodayRate > 0 ? currentSellRate / yadioTodayRate : 1;
+    const buySpreadRatio =
+      currentSellRate > 0 ? currentBuyRate / currentSellRate : 0.995;
 
     const sellPoints: ChartPointDto[] = [];
     const buyPoints: ChartPointDto[] = [];
     const candles: ChartCandleDto[] = [];
 
-    // Generador determinista de curva histórica suave anclada al precio en vivo actual
-    for (let i = 0; i < count; i++) {
-      const pointTime = nowSeconds - (count - 1 - i) * stepSeconds;
-      const progress = i / (count - 1 || 1);
+    let persistedCandlesCount = 0;
 
-      // Microvariación suave del mercado P2P (±0.4%)
-      const wave = Math.sin(progress * Math.PI * 2.5) * 0.0035;
-      const microJitter = Math.cos(i * 1.7) * 0.0012;
-      const factor = 1 - (1 - progress) * (wave + microJitter);
+    for (let i = 0; i < hoursCount; i++) {
+      const bucketTime = fromBucket + i * 3600;
+      const recorded = storedByBucket.get(bucketTime);
 
-      const sVal = Number((currentSellRate * factor).toFixed(2));
-      const bVal = Number((currentBuyRate * factor).toFixed(2));
-      const midVal = Number(((sVal + bVal) / 2).toFixed(2));
+      if (recorded) {
+        persistedCandlesCount += 1;
 
-      sellPoints.push({ time: pointTime, value: sVal });
-      buyPoints.push({ time: pointTime, value: bVal });
+        // Si es la hora en curso, reflejar también el último tick en vivo recibido
+        const isCurrentHour = bucketTime === currentHourBucket;
+        const closeVal = isCurrentHour ? currentSellRate : recorded.close;
+        const highVal = isCurrentHour
+          ? Number(Math.max(recorded.high, currentSellRate).toFixed(2))
+          : recorded.high;
+        const lowVal = isCurrentHour
+          ? Number(Math.min(recorded.low, currentSellRate).toFixed(2))
+          : recorded.low;
+        const buyVal = isCurrentHour ? currentBuyRate : recorded.buyClose;
 
-      // Velas OHLC consistentes
-      const open = i === 0 ? midVal : candles[i - 1]?.close ?? midVal;
-      const close = sVal;
-      const high = Number((Math.max(open, close) + Math.abs(sVal - bVal) * 0.25).toFixed(2));
-      const low = Number((Math.min(open, close) - Math.abs(sVal - bVal) * 0.25).toFixed(2));
+        candles.push({
+          time: bucketTime,
+          open: recorded.open,
+          high: highVal,
+          low: lowVal,
+          close: closeVal,
+        });
+        sellPoints.push({ time: bucketTime, value: closeVal });
+        buyPoints.push({ time: bucketTime, value: buyVal });
+      } else {
+        // Hora histórica previa aún no capturada: anclada al histórico diario real de Yadio VES
+        const { dateIso, nextDateIso, hourOfDay } = getVenezuelaDateAndHour(bucketTime);
+        const dayRate = yadioRates.get(dateIso) ?? yadioTodayRate;
+        const nextDayRate = yadioRates.get(nextDateIso) ?? dayRate;
+        const dayProgress = hourOfDay / 24;
+        const interpolatedYadio = dayRate + (nextDayRate - dayRate) * dayProgress;
 
-      candles.push({
-        time: pointTime,
-        open,
-        high,
-        low,
-        close,
-      });
+        // Oscilación intradiaria determinista muy sutil (±0.15%) para formar cuerpo realista de vela 1H
+        const hourWave = Math.sin((bucketTime / 3600) * 0.65) * 0.0015;
+        const estimatedClose = Number(
+          (interpolatedYadio * bankPremiumRatio * (1 + hourWave)).toFixed(2)
+        );
+        const prevClose = candles[i - 1]?.close ?? estimatedClose;
+        const openVal = prevClose;
+        const closeVal =
+          bucketTime === currentHourBucket ? currentSellRate : estimatedClose;
+
+        const wickPadding = Math.max(0.35, Math.abs(closeVal - openVal) * 0.25);
+        const highVal = Number((Math.max(openVal, closeVal) + wickPadding).toFixed(2));
+        const lowVal = Number((Math.min(openVal, closeVal) - wickPadding).toFixed(2));
+        const buyVal = Number((closeVal * buySpreadRatio).toFixed(2));
+
+        candles.push({
+          time: bucketTime,
+          open: openVal,
+          high: highVal,
+          low: lowVal,
+          close: closeVal,
+        });
+        sellPoints.push({ time: bucketTime, value: closeVal });
+        buyPoints.push({ time: bucketTime, value: buyVal });
+      }
     }
 
     return {
-      bankName: targetBank?.bankName ?? "Banesco",
+      bankName: resolvedBankName,
       timeframe,
+      candleInterval: "1H",
+      timezone: "America/Caracas",
+      currentHourVetLabel: shortHourVet,
+      persistedCandlesCount,
       sellPoints,
       buyPoints,
       candles,
@@ -416,8 +628,29 @@ export class BinanceP2PLiveService {
       currentSpreadPct,
       isLive: targetBank?.isLiveApi ?? true,
       benchmarkSource: targetBank?.isLiveApi
-        ? "Binance P2P C2C (Comerciantes Verificados)"
-        : "CriptoYa API (Fallback Público)",
+        ? "Binance P2P C2C • Velas 1H (24/7 Hora Venezuela)"
+        : "CriptoYa API • Velas 1H (24/7 Hora Venezuela)",
     };
+  }
+}
+
+// Colector 24/7 en segundo plano cuando el servidor Node está activo (independiente de si el navegador está abierto)
+const globalForCollector = globalThis as unknown as {
+  __botP2pHourlyCollectorStarted?: boolean;
+};
+
+if (
+  typeof window === "undefined" &&
+  process.env.NEXT_PHASE !== "phase-production-build" &&
+  !globalForCollector.__botP2pHourlyCollectorStarted
+) {
+  globalForCollector.__botP2pHourlyCollectorStarted = true;
+  const collectorTimer = setInterval(() => {
+    void BinanceP2PLiveService.collectHourlyCandlesSnapshot().catch(() => {
+      // Silencioso en caso de fallo de red transitorio
+    });
+  }, 5 * 60_000); // Cada 5 minutos 24/7
+  if (typeof collectorTimer.unref === "function") {
+    collectorTimer.unref();
   }
 }

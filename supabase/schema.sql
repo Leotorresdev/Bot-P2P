@@ -65,11 +65,40 @@ CREATE TABLE IF NOT EXISTS public.daily_closings (
   UNIQUE (user_id, closing_iso_date)
 );
 
--- 5. Permisos y Políticas de Acceso
+-- 5. Configuración Fiscal Personalizada por Operador
+CREATE TABLE IF NOT EXISTS public.p2p_tax_config (
+  user_id TEXT PRIMARY KEY REFERENCES public.p2p_users(id) ON DELETE CASCADE,
+  seniat_tax_percent DOUBLE PRECISION NOT NULL DEFAULT 16,
+  maker_fee_percent DOUBLE PRECISION NOT NULL DEFAULT 0.163,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 6. Velas Horarias 24/7 (1 Vela por cada Hora exacta - Hora Venezuela UTC-4)
+CREATE TABLE IF NOT EXISTS public.p2p_hourly_candles (
+  bank_name TEXT NOT NULL,
+  hour_bucket_utc BIGINT NOT NULL,
+  hour_label_vet TEXT NOT NULL,
+  open DOUBLE PRECISION NOT NULL,
+  high DOUBLE PRECISION NOT NULL,
+  low DOUBLE PRECISION NOT NULL,
+  close DOUBLE PRECISION NOT NULL,
+  buy_open DOUBLE PRECISION NOT NULL,
+  buy_close DOUBLE PRECISION NOT NULL,
+  samples_count INTEGER NOT NULL DEFAULT 1,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (bank_name, hour_bucket_utc)
+);
+
+CREATE INDEX IF NOT EXISTS idx_p2p_hourly_candles_bank_bucket
+  ON public.p2p_hourly_candles (bank_name, hour_bucket_utc DESC);
+
+-- 7. Permisos y Políticas de Acceso (RLS)
 ALTER TABLE public.p2p_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.api_credentials ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.p2p_orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.daily_closings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.p2p_tax_config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.p2p_hourly_candles ENABLE ROW LEVEL SECURITY;
 
 -- Políticas permisivas para la API Backend
 DROP POLICY IF EXISTS "Allow Backend MVP Access Users" ON public.p2p_users;
@@ -84,12 +113,28 @@ CREATE POLICY "Allow Backend MVP Access Orders" ON public.p2p_orders FOR ALL TO 
 DROP POLICY IF EXISTS "Allow Backend MVP Access Closings" ON public.daily_closings;
 CREATE POLICY "Allow Backend MVP Access Closings" ON public.daily_closings FOR ALL TO public USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow Backend MVP Access TaxConfig" ON public.p2p_tax_config;
+CREATE POLICY "Allow Backend MVP Access TaxConfig" ON public.p2p_tax_config FOR ALL TO public USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow Backend MVP Access HourlyCandles" ON public.p2p_hourly_candles;
+CREATE POLICY "Allow Backend MVP Access HourlyCandles" ON public.p2p_hourly_candles FOR ALL TO public USING (true) WITH CHECK (true);
+
 GRANT ALL ON TABLE public.p2p_users TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.api_credentials TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.p2p_orders TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.daily_closings TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.p2p_tax_config TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.p2p_hourly_candles TO anon, authenticated, service_role;
 
--- 6. Insertar tu cuenta registrada para que puedas iniciar sesión de inmediato
+-- 8. Recolección 24/7 Automática en la Nube (Opcional con pg_cron + pg_net en Supabase)
+-- Activa las extensiones pg_cron y pg_net en Dashboard -> Database -> Extensions y ejecuta:
+-- SELECT cron.schedule(
+--   'collect-p2p-hourly-candles-24-7',
+--   '*/5 * * * *',
+--   $$ SELECT net.http_get(url := 'https://bot-p2-p.vercel.app/api/p2p/collect-candles'); $$
+-- );
+
+-- 9. Insertar tu cuenta registrada para que puedas iniciar sesión de inmediato
 INSERT INTO public.p2p_users (
   id,
   email,

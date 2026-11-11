@@ -426,6 +426,10 @@ export const routes = baseApp
       return c.json({ data: chartData }, 200);
     }
   )
+  .get("/p2p/collect-candles", async (c) => {
+    const result = await BinanceP2PLiveService.collectHourlyCandlesSnapshot();
+    return c.json({ data: result }, 200);
+  })
   .post("/p2p/sync-binance", async (c) => {
     const user = c.get("user");
     if (!user) {

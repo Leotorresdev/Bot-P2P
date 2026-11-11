@@ -261,7 +261,10 @@ export interface DailyClosingActaDto {
   readonly integrityHashSha256: string;
 }
 
-export const ChartTimeframeSchema = z.enum(["LIVE", "1H", "24H"]).default("24H");
+export const ChartTimeframeSchema = z
+  .enum(["24H", "72H", "7D"])
+  .default("24H")
+  .catch("24H");
 export type ChartTimeframe = z.infer<typeof ChartTimeframeSchema>;
 
 export const GetChartDataQuerySchema = z.object({
@@ -286,6 +289,10 @@ export interface ChartCandleDto {
 export interface BankChartDataDto {
   readonly bankName: string;
   readonly timeframe: ChartTimeframe;
+  readonly candleInterval: "1H";
+  readonly timezone: "America/Caracas";
+  readonly currentHourVetLabel: string;
+  readonly persistedCandlesCount: number;
   readonly sellPoints: readonly ChartPointDto[];
   readonly buyPoints: readonly ChartPointDto[];
   readonly candles: readonly ChartCandleDto[];
