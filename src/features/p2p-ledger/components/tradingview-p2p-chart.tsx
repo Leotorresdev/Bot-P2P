@@ -192,7 +192,6 @@ export function TradingViewP2PChart({
           type: "custom",
           formatter: (price: number) => `${price.toFixed(2)} Bs.`,
         },
-        title: "Vela 1H (VET)",
       });
 
       candleSeriesRef.current = candleSeries;
@@ -206,7 +205,6 @@ export function TradingViewP2PChart({
           type: "custom",
           formatter: (price: number) => `${price.toFixed(2)} Bs.`,
         },
-        title: "Venta 1H",
       });
 
       const buySeries = chart.addSeries(AreaSeries, {
@@ -218,7 +216,6 @@ export function TradingViewP2PChart({
           type: "custom",
           formatter: (price: number) => `${price.toFixed(2)} Bs.`,
         },
-        title: "Compra 1H",
       });
 
       sellSeriesRef.current = sellSeries;
