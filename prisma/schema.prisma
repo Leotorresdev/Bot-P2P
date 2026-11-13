@@ -165,8 +165,11 @@ model P2POrder {
   netFreeProfitUsdt   Decimal   @db.Decimal(20, 8) // Ganancia Neta Libre en USDT
   marginPercent       Decimal   @db.Decimal(10, 4) // Porcentaje de margen neto (+1.66%)
   orderStatus         String    @default("COMPLETED")
+  statusCategory      String    @default("COMPLETED")
+  createTimeMs        BigInt    @default(0)
   createTime          DateTime  // Hora exacta de la orden en Binance
 
+  @@index([userId, createTimeMs(sort: Desc)])
   @@index([userId, createTime])
   @@index([payMethodName])
   @@map("p2p_order")

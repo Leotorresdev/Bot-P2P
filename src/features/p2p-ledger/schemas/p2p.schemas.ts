@@ -4,11 +4,71 @@ import { z } from "zod";
 // 1. ENUMS Y CONSTANTES DE DOMINIO
 // =========================================================
 
-export const PeriodFilterSchema = z.enum(["TODAY", "7D", "30D"]).default("TODAY");
+export const PeriodFilterSchema = z
+  .enum(["TODAY", "MONTH", "DAY", "ALL", "7D", "30D"])
+  .default("TODAY");
 export type PeriodFilter = z.infer<typeof PeriodFilterSchema>;
 
 export const LotMethodSchema = z.enum(["FIFO", "WAC"]).default("FIFO");
 export type LotMethod = z.infer<typeof LotMethodSchema>;
+
+export const AveragePriceModeSchema = z
+  .enum(["WEIGHTED", "SIMPLE"])
+  .default("WEIGHTED");
+export type AveragePriceMode = z.infer<typeof AveragePriceModeSchema>;
+
+export const MerchantBadgeSchema = z.enum(["BRONZE", "SILVER", "GOLD"]);
+export type MerchantBadgeType = z.infer<typeof MerchantBadgeSchema>;
+
+export const MERCHANT_BADGE_META: Record<
+  MerchantBadgeType,
+  {
+    readonly id: MerchantBadgeType;
+    readonly label: string;
+    readonly emoji: string;
+    readonly feePercent: number;
+    readonly feeFactor: string;
+    readonly feeLabel: string;
+  }
+> = {
+  BRONZE: {
+    id: "BRONZE",
+    label: "Bronce",
+    emoji: "🥉",
+    feePercent: 0.2,
+    feeFactor: "0.0020",
+    feeLabel: "-0.20%",
+  },
+  SILVER: {
+    id: "SILVER",
+    label: "Plata",
+    emoji: "🥈",
+    feePercent: 0.175,
+    feeFactor: "0.00175",
+    feeLabel: "-0.175%",
+  },
+  GOLD: {
+    id: "GOLD",
+    label: "Oro",
+    emoji: "🥇",
+    feePercent: 0.125,
+    feeFactor: "0.00125",
+    feeLabel: "-0.125%",
+  },
+};
+
+export const OrderStatusCategorySchema = z.enum([
+  "COMPLETED",
+  "CANCELLED",
+  "IN_APPEAL",
+  "IN_PROGRESS",
+]);
+export type OrderStatusCategory = z.infer<typeof OrderStatusCategorySchema>;
+
+export const OrderStatusFilterSchema = z
+  .enum(["ALL", "COMPLETED", "CANCELLED", "IN_APPEAL", "IN_PROGRESS"])
+  .default("ALL");
+export type OrderStatusFilter = z.infer<typeof OrderStatusFilterSchema>;
 
 export const TradeTypeFilterSchema = z
   .enum(["ALL", "SELL", "BUY"])
@@ -35,7 +95,10 @@ export type VenezuelanBank = z.infer<typeof VenezuelanBankSchema>;
 
 export const GetSummaryQuerySchema = z.object({
   period: PeriodFilterSchema,
-  method: LotMethodSchema,
+  method: LotMethodSchema.optional().default("FIFO"),
+  date: z.string().trim().max(25).optional(),
+  month: z.string().trim().max(10).optional(),
+  avgMode: AveragePriceModeSchema,
 });
 
 export const GetBanksQuerySchema = z.object({
@@ -46,13 +109,37 @@ export const GetBanksQuerySchema = z.object({
 export type GetBanksQueryInput = z.infer<typeof GetBanksQuerySchema>;
 
 export const GetOrdersQuerySchema = z.object({
-  period: PeriodFilterSchema,
+  period: PeriodFilterSchema.optional().default("ALL"),
   tradeType: TradeTypeFilterSchema,
+  status: OrderStatusFilterSchema.optional().default("ALL"),
   bank: z.string().trim().max(40).optional(),
   date: z.string().trim().max(25).optional(),
+  month: z.string().trim().max(10).optional(),
   page: z.coerce.number().int().min(1).max(1000).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  limit: z.coerce.number().int().min(1).max(5000).default(50),
 });
+
+export const ExportClosingQuerySchema = z.object({
+  scope: z.enum(["DAY", "MONTH"]).default("DAY"),
+  date: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Formato requerido YYYY-MM-DD")
+    .optional(),
+  month: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}$/, "Formato requerido YYYY-MM")
+    .optional(),
+  format: z.enum(["xlsx", "csv", "pdf"]).default("xlsx"),
+  avgMode: AveragePriceModeSchema,
+});
+export type ExportClosingQueryInput = z.infer<typeof ExportClosingQuerySchema>;
+
+export const UpdateMerchantBadgeSchema = z.object({
+  badge: MerchantBadgeSchema,
+});
+export type UpdateMerchantBadgeInput = z.infer<typeof UpdateMerchantBadgeSchema>;
 
 export const SaveBinanceVaultBodySchema = z.object({
   label: z
@@ -172,6 +259,18 @@ export type UpdateTaxConfigInput = z.infer<typeof UpdateTaxConfigSchema>;
 export interface UserTaxConfigDto {
   readonly seniatTaxPercent: number;
   readonly makerFeePercent: number;
+  readonly merchantBadge: MerchantBadgeType;
+  readonly badgeFeePercent: number;
+  readonly updatedAt?: string;
+}
+
+export interface MerchantBadgeConfigDto {
+  readonly badge: MerchantBadgeType;
+  readonly label: string;
+  readonly emoji: string;
+  readonly feePercent: number;
+  readonly feeFactor: string;
+  readonly feeLabel: string;
   readonly updatedAt?: string;
 }
 
@@ -181,13 +280,51 @@ export interface UserTaxConfigDto {
 
 export interface PnlSummaryDto {
   readonly period: PeriodFilter;
+  readonly periodLabel: string;
   readonly method: LotMethod;
-  readonly reconciledOrdersCount: number;
+  readonly avgMode: AveragePriceMode;
+  readonly merchantBadge: MerchantBadgeType;
+  readonly merchantBadgeLabel: string;
+  readonly badgeFeePercent: string;
+  readonly badgeFeeFactor: string;
+  // Volúmenes completados
+  readonly totalSoldUsdt: string;
+  readonly totalSoldVes: string;
+  readonly totalBoughtUsdt: string;
+  readonly totalBoughtVes: string;
+  readonly totalVolumeUsdt: string;
+  // Promedios y Brecha
+  readonly avgSellRateWeightedVes: string;
+  readonly avgBuyRateWeightedVes: string;
+  readonly avgSellRateSimpleVes: string;
+  readonly avgBuyRateSimpleVes: string;
+  readonly activeAvgSellRateVes: string;
+  readonly activeAvgBuyRateVes: string;
+  readonly brechaPointsVes: string;
   readonly averageSpreadPercent: string;
+  // Vuelta & Excedente
+  readonly vueltaVolumeUsdt: string;
+  readonly pendingDirection: "NONE" | "BUY_BACK" | "SELL_OUT";
+  readonly pendingUsdt: string;
+  // Ganancia Bruta, Comisión Insignia y Ganancia Neta Final
+  readonly grossProfitVes: string;
+  readonly grossProfitUsdt: string;
+  readonly volumeCommissionUsdt: string;
+  readonly volumeCommissionVes: string;
+  readonly netProfitUsdt: string;
+  readonly netProfitVes: string;
+  readonly isNetProfitNegative: boolean;
+  // Contadores exactos del período
+  readonly completedSellCount: number;
+  readonly completedBuyCount: number;
+  readonly cancelledCount: number;
+  readonly appealCount: number;
+  readonly inProgressCount: number;
+  readonly totalOrdersInPeriod: number;
+  readonly reconciledOrdersCount: number;
+  // Compatibilidad con vistas previas
   readonly netFreeProfitUsdt: string;
   readonly netFreeProfitVes: string;
-  readonly grossProfitUsdt: string;
-  readonly grossProfitVes: string;
   readonly seniatTax16Usdt: string;
   readonly seniatTax16Ves: string;
   readonly seniatTaxRatePercent: string;
@@ -222,27 +359,26 @@ export interface BankLiveMonitorDto {
 
 export interface P2POrderRowDto {
   readonly orderNumber: string;
+  readonly advNo: string;
+  readonly createTimeMs: number;
   readonly timeVetLabel: string;
+  readonly dateLabelVet: string;
+  readonly timeLabelVet: string;
+  readonly dateIsoVet: string;
+  readonly monthIsoVet: string;
   readonly tradeType: "BUY" | "SELL";
+  readonly orderStatus: string;
+  readonly statusCategory: OrderStatusCategory;
+  readonly statusLabel: string;
   readonly advertisementRole: "MAKER" | "TAKER";
-  readonly payMethodName: VenezuelanBank;
+  readonly asset: string;
+  readonly fiat: string;
+  readonly payMethodName: string;
   readonly counterPartNickName: string;
-  readonly amountUsdt: string;
-  readonly commissionUsdt: string;
-  readonly netBuyUsdt?: string;
   readonly unitPriceVes: string;
-  readonly costBasisRateVes: string;
+  readonly amountUsdt: string;
   readonly totalPriceVes: string;
-  readonly exemptCapitalVes: string;
-  readonly seniatTax16Ves: string;
-  readonly seniatTax16Usdt: string;
-  readonly seniatTaxPercentApplied?: string;
-  readonly makerFeePercentApplied?: string;
-  readonly netFreeProfitUsdt: string;
-  readonly netFreeProfitVes: string;
-  readonly marginPercent: string;
-  readonly lotBadge?: string;
-  readonly lotRemainingLabel?: string;
+  readonly commissionUsdt: string;
 }
 
 export interface DailyClosingActaDto {

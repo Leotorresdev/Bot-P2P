@@ -1,15 +1,27 @@
 import "server-only";
 import Decimal from "decimal.js";
-import type {
-  BankLiveMonitorDto,
-  DailyClosingActaDto,
-  LotMethod,
-  P2POrderRowDto,
-  PeriodFilter,
-  PnlSummaryDto,
-  TradeTypeFilter,
-  VenezuelanBank,
+import {
+  MERCHANT_BADGE_META,
+  type AveragePriceMode,
+  type BankLiveMonitorDto,
+  type DailyClosingActaDto,
+  type LotMethod,
+  type MerchantBadgeConfigDto,
+  type MerchantBadgeType,
+  type OrderStatusCategory,
+  type OrderStatusFilter,
+  type P2POrderRowDto,
+  type PeriodFilter,
+  type PnlSummaryDto,
+  type TradeTypeFilter,
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
+import {
+  formatVetOrderTimestamp,
+  getCurrentVetDateIso,
+  getCurrentVetMonthIso,
+  getVetDayRangeMs,
+  getVetMonthRangeMs,
+} from "@/lib/timezone-utc4";
 import {
   decryptBinanceCredentials,
   encryptBinanceCredentials,
@@ -24,153 +36,18 @@ import {
 // Configuración de alta precisión financiera (28 dígitos significativos, redondeo bancario)
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 
-export const SENIAT_TAX_RATE = new Decimal("0.16");
-export const BINANCE_MAKER_FEE_RATE = new Decimal("0.00163"); // 0.163% Comisión Maker P2P Binance
+const BINANCE_HOSTS = [
+  "https://api.binance.com",
+  "https://api1.binance.com",
+  "https://api2.binance.com",
+  "https://api3.binance.com",
+  "https://api-gcp.binance.com",
+] as const;
 
-export interface RawCompletedOrderInput {
-  readonly orderNumber: string;
-  readonly timeVetLabel: string;
-  readonly tradeType: "BUY" | "SELL";
-  readonly advertisementRole: "MAKER" | "TAKER";
-  readonly payMethodName: VenezuelanBank;
-  readonly counterPartNickName: string;
-  readonly amountUsdt: string;
-  readonly commissionUsdt: string;
-  readonly unitPriceVes: string;
-  readonly costBasisRateVes: string;
-  readonly lotBadge?: string;
-  readonly lotRemainingLabel?: string;
-}
-
-/**
- * Motor matemático exacto (Decimal.js) que procesa una orden de Binance C2C,
- * aplica la comisión Maker configurable (por defecto 0.163%), separa el Capital Rotado Exento
- * del Margen Gravable y calcula el Impuesto SENIAT configurable (por defecto 16% - Norma BA VEN-NIF).
- */
-export function calculateOrderFiscalMetrics(
-  raw: RawCompletedOrderInput,
-  taxConfig?: { seniatTaxPercent?: number; makerFeePercent?: number }
-): P2POrderRowDto {
-  const amount = new Decimal(raw.amountUsdt);
-  const unitPrice = new Decimal(raw.unitPriceVes);
-  const costBasisRate = new Decimal(raw.costBasisRateVes);
-
-  const seniatRateDec =
-    taxConfig?.seniatTaxPercent != null
-      ? new Decimal(taxConfig.seniatTaxPercent).div(100)
-      : SENIAT_TAX_RATE;
-  const makerFeeRateDec =
-    taxConfig?.makerFeePercent != null
-      ? new Decimal(taxConfig.makerFeePercent).div(100)
-      : BINANCE_MAKER_FEE_RATE;
-
-  const seniatPctLabel = (
-    taxConfig?.seniatTaxPercent != null ? taxConfig.seniatTaxPercent : 16
-  ).toString();
-  const makerFeePctLabel = (
-    taxConfig?.makerFeePercent != null ? taxConfig.makerFeePercent : 0.163
-  ).toString();
-
-  const fee =
-    raw.advertisementRole === "MAKER"
-      ? amount.mul(makerFeeRateDec)
-      : new Decimal(raw.commissionUsdt);
-
-  const totalVes = amount.mul(unitPrice);
-
-  if (raw.tradeType === "BUY") {
-    const netBuyUsdt = Decimal.max(new Decimal(0), amount.minus(fee));
-    const effectiveUnitCostVes = netBuyUsdt.gt(0)
-      ? totalVes.div(netBuyUsdt)
-      : unitPrice;
-
-    return {
-      orderNumber: raw.orderNumber,
-      timeVetLabel: raw.timeVetLabel,
-      tradeType: "BUY",
-      advertisementRole: raw.advertisementRole,
-      payMethodName: raw.payMethodName,
-      counterPartNickName: raw.counterPartNickName,
-      amountUsdt: amount.toFixed(2),
-      commissionUsdt: fee.toFixed(2),
-      netBuyUsdt: netBuyUsdt.toFixed(2),
-      unitPriceVes: unitPrice.toFixed(2),
-      costBasisRateVes: effectiveUnitCostVes.toFixed(2),
-      totalPriceVes: totalVes.toFixed(2),
-      exemptCapitalVes: totalVes.toFixed(2),
-      seniatTax16Ves: "0.00",
-      seniatTax16Usdt: "0.00",
-      seniatTaxPercentApplied: seniatPctLabel,
-      makerFeePercentApplied: makerFeePctLabel,
-      netFreeProfitUsdt: "0.00",
-      netFreeProfitVes: "0.00",
-      marginPercent: "0.00",
-      lotBadge: raw.lotBadge ?? "LOTE ACTIVO",
-      lotRemainingLabel:
-        raw.lotRemainingLabel ?? `Neto: ${netBuyUsdt.toFixed(2)} USDT`,
-    };
-  }
-
-  // Operación de VENTA (SELL):
-  const exemptCapitalVes = amount.mul(costBasisRate);
-  const feeInVes = fee.mul(unitPrice);
-  const grossProfitVes = Decimal.max(
-    new Decimal(0),
-    totalVes.minus(exemptCapitalVes).minus(feeInVes)
-  );
-
-  const seniatTaxVes = grossProfitVes.mul(seniatRateDec);
-  const netFreeProfitVes = grossProfitVes.minus(seniatTaxVes);
-
-  const seniatTaxUsdt = unitPrice.gt(0)
-    ? seniatTaxVes.div(unitPrice)
-    : new Decimal(0);
-  const netFreeProfitUsdt = unitPrice.gt(0)
-    ? netFreeProfitVes.div(unitPrice)
-    : new Decimal(0);
-
-  const marginPct = exemptCapitalVes.gt(0)
-    ? netFreeProfitVes.div(exemptCapitalVes).mul(100)
-    : new Decimal(0);
-
-  return {
-    orderNumber: raw.orderNumber,
-    timeVetLabel: raw.timeVetLabel,
-    tradeType: "SELL",
-    advertisementRole: raw.advertisementRole,
-    payMethodName: raw.payMethodName,
-    counterPartNickName: raw.counterPartNickName,
-    amountUsdt: amount.toFixed(2),
-    commissionUsdt: fee.toFixed(2),
-    unitPriceVes: unitPrice.toFixed(2),
-    costBasisRateVes: costBasisRate.toFixed(2),
-    totalPriceVes: totalVes.toFixed(2),
-    exemptCapitalVes: exemptCapitalVes.toFixed(2),
-    seniatTax16Ves: seniatTaxVes.toFixed(2),
-    seniatTax16Usdt: seniatTaxUsdt.toFixed(2),
-    seniatTaxPercentApplied: seniatPctLabel,
-    makerFeePercentApplied: makerFeePctLabel,
-    netFreeProfitUsdt: netFreeProfitUsdt.toFixed(2),
-    netFreeProfitVes: netFreeProfitVes.toFixed(2),
-    marginPercent: marginPct.toFixed(2),
-  };
-}
-
-function normalizePayMethod(rawName: string | undefined): VenezuelanBank {
-  if (!rawName) return "Banesco";
-  const lower = rawName.toLowerCase();
-  if (lower.includes("pago") || lower.includes("movil") || lower.includes("móvil")) {
-    return "Pago Móvil";
-  }
-  if (lower.includes("mercantil")) return "Mercantil";
-  if (lower.includes("provincial") || lower.includes("bbva")) return "BBVA";
-  if (lower.includes("venezuela") || lower.includes("bdv")) {
-    return "Banco de Venezuela";
-  }
-  if (lower.includes("bancamiga")) return "Bancamiga";
-  if (lower.includes("bnc") || lower.includes("nacional")) return "BNC";
-  return "Banesco";
-}
+// Binance SAPI limita el intervalo startTimestamp..endTimestamp a 30 días (usamos 28d por seguridad)
+const MAX_BINANCE_WINDOW_MS = 28 * 86_400_000;
+// Binance conserva historial de órdenes C2C hasta 6 meses (~180 días)
+const MAX_BINANCE_LOOKBACK_MS = 180 * 86_400_000;
 
 interface BinanceC2COrderItem {
   orderNumber: string;
@@ -189,100 +66,266 @@ interface BinanceC2COrderItem {
   advertisementRole?: "MAKER" | "TAKER";
 }
 
-const BINANCE_HOSTS = [
-  "https://api.binance.com",
-  "https://api1.binance.com",
-  "https://api2.binance.com",
-  "https://api3.binance.com",
-  "https://api-gcp.binance.com",
-] as const;
+export interface ClosingReportData {
+  readonly scope: "DAY" | "MONTH";
+  readonly periodKey: string;
+  readonly periodLabel: string;
+  readonly generatedAtVet: string;
+  readonly summary: PnlSummaryDto;
+  readonly orders: readonly P2POrderRowDto[];
+}
 
-async function fetchBinanceOrdersBySide(
+/**
+ * Formatea un Decimal a string legible con separadores de miles sin pasar por floats JS.
+ */
+export function formatDecimalMoney(
+  val: Decimal,
+  decimals: number = 2
+): string {
+  const fixed = val.toFixed(decimals);
+  const isNegative = fixed.startsWith("-");
+  const unsigned = isNegative ? fixed.slice(1) : fixed;
+  const [intPart = "0", decPart] = unsigned.split(".");
+  const withCommas = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const formatted = decPart !== undefined ? `${withCommas}.${decPart}` : withCommas;
+  return isNegative ? `-${formatted}` : formatted;
+}
+
+/**
+ * Conserva la precisión exacta recibida de Binance asegurando al menos `minDecimals` decimales.
+ */
+export function formatExactDecimalString(
+  raw: string | undefined,
+  minDecimals: number = 2
+): string {
+  try {
+    const cleaned = (raw ?? "0").trim() || "0";
+    const dec = new Decimal(cleaned);
+    const fullStr = dec.toFixed();
+    const [intPart = "0", fracPart = ""] = fullStr.split(".");
+    const trimmedFrac = fracPart.replace(/0+$/, "");
+    const finalFrac =
+      trimmedFrac.length >= minDecimals
+        ? trimmedFrac
+        : trimmedFrac.padEnd(minDecimals, "0");
+    return `${intPart}.${finalFrac}`;
+  } catch {
+    return new Decimal(0).toFixed(minDecimals);
+  }
+}
+
+/**
+ * Normaliza cualquier código o enum de estado proveniente de Binance C2C
+ * sin omitir órdenes canceladas, apeladas o en curso.
+ */
+export function mapBinanceOrderStatus(rawStatus: string | number | undefined): {
+  readonly orderStatus: string;
+  readonly statusCategory: OrderStatusCategory;
+  readonly statusLabel: string;
+} {
+  const rawStr = String(rawStatus ?? "COMPLETED").trim().toUpperCase();
+
+  if (rawStr === "COMPLETED" || rawStr === "4") {
+    return {
+      orderStatus: rawStr === "4" ? "COMPLETED" : rawStr,
+      statusCategory: "COMPLETED",
+      statusLabel: "Completada",
+    };
+  }
+
+  if (
+    rawStr === "CANCELLED" ||
+    rawStr === "CANCELLED_BY_SYSTEM" ||
+    rawStr.includes("CANCEL") ||
+    rawStr === "6" ||
+    rawStr === "7"
+  ) {
+    const normalizedName =
+      rawStr === "6"
+        ? "CANCELLED"
+        : rawStr === "7"
+          ? "CANCELLED_BY_SYSTEM"
+          : rawStr;
+    return {
+      orderStatus: normalizedName,
+      statusCategory: "CANCELLED",
+      statusLabel: "Cancelada",
+    };
+  }
+
+  if (rawStr === "IN_APPEAL" || rawStr.includes("APPEAL") || rawStr === "5") {
+    return {
+      orderStatus: rawStr === "5" ? "IN_APPEAL" : rawStr,
+      statusCategory: "IN_APPEAL",
+      statusLabel: "Apelada",
+    };
+  }
+
+  const normalizedProgress =
+    rawStr === "0"
+      ? "PENDING"
+      : rawStr === "1"
+        ? "TRADING"
+        : rawStr === "2"
+          ? "BUYER_PAYED"
+          : rawStr === "3"
+            ? "DISTRIBUTING"
+            : rawStr;
+
+  return {
+    orderStatus: normalizedProgress,
+    statusCategory: "IN_PROGRESS",
+    statusLabel: "En curso",
+  };
+}
+
+function toMirrorOrderDto(rec: StoredP2POrderRecord): P2POrderRowDto {
+  const tsInfo = formatVetOrderTimestamp(rec.createTimeMs);
+  const statusInfo = mapBinanceOrderStatus(rec.orderStatus);
+
+  const amountDec = new Decimal(rec.amountUsdt || "0");
+  const priceDec = new Decimal(rec.unitPriceVes || "0");
+  const totalStr =
+    rec.totalPriceVes && new Decimal(rec.totalPriceVes).gt(0)
+      ? rec.totalPriceVes
+      : amountDec.mul(priceDec).toFixed(2);
+
+  return {
+    orderNumber: rec.orderNumber,
+    advNo: rec.advNo || "---",
+    createTimeMs: rec.createTimeMs,
+    timeVetLabel: tsInfo.dateTimeLabel,
+    dateLabelVet: tsInfo.dateLabel,
+    timeLabelVet: tsInfo.timeLabel,
+    dateIsoVet: tsInfo.dateIso,
+    monthIsoVet: tsInfo.monthIso,
+    tradeType: rec.tradeType,
+    orderStatus: statusInfo.orderStatus,
+    statusCategory: statusInfo.statusCategory,
+    statusLabel: statusInfo.statusLabel,
+    advertisementRole: rec.advertisementRole,
+    asset: rec.asset || "USDT",
+    fiat: rec.fiat || "VES",
+    payMethodName: rec.payMethodName || "P2P",
+    counterPartNickName: rec.counterPartNickName || "Cliente P2P",
+    unitPriceVes: formatExactDecimalString(rec.unitPriceVes, 2),
+    amountUsdt: formatExactDecimalString(rec.amountUsdt, 2),
+    totalPriceVes: formatExactDecimalString(totalStr, 2),
+    commissionUsdt: formatExactDecimalString(rec.commissionUsdt || "0", 4),
+  };
+}
+
+function resolveSyncWindows(
+  startMs: number,
+  endMs: number
+): Array<{ readonly startMs: number; readonly endMs: number }> {
+  const oldestAllowedMs = Date.now() - MAX_BINANCE_LOOKBACK_MS;
+  const clampedStart = Math.max(startMs, oldestAllowedMs);
+  const clampedEnd = Math.min(endMs, Date.now() + 60_000);
+
+  if (clampedEnd <= clampedStart) return [];
+
+  const windows: Array<{ readonly startMs: number; readonly endMs: number }> = [];
+  let cursor = clampedStart;
+  while (cursor < clampedEnd) {
+    const winEnd = Math.min(clampedEnd, cursor + MAX_BINANCE_WINDOW_MS - 1);
+    windows.push({ startMs: cursor, endMs: winEnd });
+    cursor = winEnd + 1;
+  }
+  return windows;
+}
+
+/**
+ * Consulta `/sapi/v1/c2c/orderMatch/listUserOrderHistory` paginando 100 en 100
+ * sobre todas las sub-ventanas (<= 28 días) para no omitir ninguna orden del período.
+ */
+async function fetchBinanceOrdersInRange(
   apiKey: string,
   apiSecret: string,
   tradeType: "BUY" | "SELL",
-  maxPages: number = 8
-): Promise<{ success: boolean; data: BinanceC2COrderItem[]; error?: string }> {
-  // Inicio de hoy en Venezuela (America/Caracas, UTC-4)
-  const now = new Date();
-  const vetOffsetMs = 4 * 60 * 60 * 1000;
-  const vetNow = new Date(now.getTime() - vetOffsetMs);
-  const startOfDayVet = new Date(
-    Date.UTC(
-      vetNow.getUTCFullYear(),
-      vetNow.getUTCMonth(),
-      vetNow.getUTCDate(),
-      4, // 00:00:00 VET = 04:00:00 UTC
-      0,
-      0,
-      0
-    )
-  );
-  const startTimestamp = startOfDayVet.getTime();
+  startMs: number,
+  endMs: number,
+  maxPagesPerWindow: number = 100
+): Promise<{
+  readonly success: boolean;
+  readonly data: readonly BinanceC2COrderItem[];
+  readonly error?: string;
+}> {
+  const windows = resolveSyncWindows(startMs, endMs);
+  if (windows.length === 0) {
+    return { success: true, data: [] };
+  }
 
   let lastError = "";
 
   for (const host of BINANCE_HOSTS) {
     try {
-      const allHostOrders: BinanceC2COrderItem[] = [];
-      let page = 1;
-      let hostSuccess = false;
+      const accumulated: BinanceC2COrderItem[] = [];
+      let hostSucceeded = true;
 
-      while (page <= maxPages) {
-        const timestamp = Date.now();
-        // Parámetro tradeType es OBLIGATORIO en Binance SAPI C2C. recvWindow=60000 previene desincronización de reloj.
-        const queryString = `tradeType=${tradeType}&timestamp=${timestamp}&recvWindow=60000&rows=100&page=${page}&startTimestamp=${startTimestamp}`;
-        const signature = signBinanceQuery(queryString, apiSecret);
+      for (const win of windows) {
+        const windowOrders: BinanceC2COrderItem[] = [];
+        let page = 1;
 
-        const res = await fetch(
-          `${host}/sapi/v1/c2c/orderMatch/listUserOrderHistory?${queryString}&signature=${signature}`,
-          {
-            method: "GET",
-            headers: {
-              "X-MBX-APIKEY": apiKey,
-            },
-            signal: AbortSignal.timeout(12000),
-          }
-        );
+        while (page <= maxPagesPerWindow) {
+          const timestamp = Date.now();
+          // Mantener orden exacto de parámetros para firma HMAC-SHA256 en Binance SAPI
+          const queryString = `tradeType=${tradeType}&startTimestamp=${win.startMs}&endTimestamp=${win.endMs}&page=${page}&rows=100&recvWindow=60000&timestamp=${timestamp}`;
+          const signature = signBinanceQuery(queryString, apiSecret);
 
-        const json = (await res.json()) as {
-          code: string | number;
-          message?: string;
-          msg?: string;
-          data?: BinanceC2COrderItem[];
-          total?: number;
-          success?: boolean;
-        };
+          const res = await fetch(
+            `${host}/sapi/v1/c2c/orderMatch/listUserOrderHistory?${queryString}&signature=${signature}`,
+            {
+              method: "GET",
+              headers: {
+                "X-MBX-APIKEY": apiKey,
+              },
+              signal: AbortSignal.timeout(15000),
+            }
+          );
 
-        if (
-          res.ok &&
-          (json.code === "000000" || json.code === 0 || json.code === "0")
-        ) {
-          hostSuccess = true;
-          const items = Array.isArray(json.data) ? json.data : [];
-          allHostOrders.push(...items);
+          const json = (await res.json()) as {
+            code: string | number;
+            message?: string;
+            msg?: string;
+            data?: BinanceC2COrderItem[];
+            total?: number;
+            success?: boolean;
+          };
 
-          // Si devolvió menos de 50 o ya no hay más datos, salimos de la paginación
-          if (items.length < 50) {
+          if (
+            res.ok &&
+            (json.code === "000000" || json.code === 0 || json.code === "0")
+          ) {
+            const items = Array.isArray(json.data) ? json.data : [];
+            windowOrders.push(...items);
+
+            if (
+              items.length === 0 ||
+              items.length < 100 ||
+              (typeof json.total === "number" &&
+                windowOrders.length >= json.total)
+            ) {
+              break;
+            }
+            page++;
+          } else {
+            lastError = json.message || json.msg || `HTTP ${res.status}`;
+            hostSucceeded = false;
             break;
           }
-          page++;
-        } else {
-          lastError = json.message || json.msg || `HTTP ${res.status}`;
-          break;
         }
+
+        if (!hostSucceeded) break;
+        accumulated.push(...windowOrders);
       }
 
-      if (hostSuccess) {
-        return {
-          success: true,
-          data: allHostOrders,
-        };
+      if (hostSucceeded) {
+        return { success: true, data: accumulated };
       }
 
       console.warn(`[Binance SAPI C2C] Host ${host} respondió:`, lastError);
 
-      // Si no es un problema de red o geo-bloqueo, no seguimos rotando
       if (
         lastError.includes("-2008") ||
         lastError.includes("-2014") ||
@@ -299,14 +342,330 @@ async function fetchBinanceOrdersBySide(
   return { success: false, data: [], error: lastError };
 }
 
+function mapRawItemsToStoredRecords(
+  userId: string,
+  items: readonly BinanceC2COrderItem[]
+): StoredP2POrderRecord[] {
+  // Espejo cronológico exacto (createTime descendente) sin filtrar ningún estado o tipo
+  const sorted = [...items].sort((a, b) => {
+    const diff = (b.createTime || 0) - (a.createTime || 0);
+    if (diff !== 0) return diff;
+    return String(b.orderNumber).localeCompare(String(a.orderNumber));
+  });
+
+  return sorted.map((o) => {
+    const tsInfo = formatVetOrderTimestamp(o.createTime);
+    const statusInfo = mapBinanceOrderStatus(o.orderStatus);
+    const amountDec = new Decimal(o.amount || "0");
+    const unitPriceDec = new Decimal(o.unitPrice || "0");
+    const totalDec = o.totalPrice
+      ? new Decimal(o.totalPrice)
+      : amountDec.mul(unitPriceDec);
+
+    return {
+      orderNumber: String(o.orderNumber),
+      advNo: String(o.advNo ?? ""),
+      userId,
+      createTimeMs: Number(o.createTime || 0),
+      timeVetLabel: tsInfo.dateTimeLabel,
+      tradeType: o.tradeType === "BUY" ? "BUY" : "SELL",
+      orderStatus: statusInfo.orderStatus,
+      statusCategory: statusInfo.statusCategory,
+      advertisementRole: o.advertisementRole === "TAKER" ? "TAKER" : "MAKER",
+      asset: String(o.asset || "USDT"),
+      fiat: String(o.fiat || "VES"),
+      payMethodName: String(o.payMethodName || "P2P").trim() || "P2P",
+      counterPartNickName: String(o.counterPartNickName || "Cliente P2P"),
+      amountUsdt: formatExactDecimalString(o.amount, 2),
+      commissionUsdt: formatExactDecimalString(o.commission || "0", 4),
+      unitPriceVes: formatExactDecimalString(o.unitPrice, 2),
+      totalPriceVes: formatExactDecimalString(totalDec.toFixed(), 2),
+      costBasisRateVes: "0.00",
+    };
+  });
+}
+
+/**
+ * Motor puro de cálculo por "Vuelta" y Brecha de Puntos basado en promedios totales
+ * de Venta y Compra y comisión de Insignia (Bronce/Plata/Oro) sobre Volumen Total.
+ * Solo las órdenes COMPLETED suman al volumen y a las ganancias.
+ */
+export function calculateVueltaSummary(params: {
+  readonly orders: readonly P2POrderRowDto[];
+  readonly period: PeriodFilter;
+  readonly periodLabel: string;
+  readonly method: LotMethod;
+  readonly avgMode: AveragePriceMode;
+  readonly badge: MerchantBadgeType;
+  readonly seniatTaxPercent?: number;
+}): PnlSummaryDto {
+  const {
+    orders,
+    period,
+    periodLabel,
+    method,
+    avgMode,
+    badge,
+    seniatTaxPercent = 16,
+  } = params;
+
+  const badgeMeta = MERCHANT_BADGE_META[badge];
+
+  let totalSoldUsdt = new Decimal(0);
+  let totalSoldVes = new Decimal(0);
+  let totalBoughtUsdt = new Decimal(0);
+  let totalBoughtVes = new Decimal(0);
+
+  let sumSellUnitPrices = new Decimal(0);
+  let sumBuyUnitPrices = new Decimal(0);
+
+  let completedSellCount = 0;
+  let completedBuyCount = 0;
+  let cancelledCount = 0;
+  let appealCount = 0;
+  let inProgressCount = 0;
+
+  for (const order of orders) {
+    if (order.statusCategory === "CANCELLED") {
+      cancelledCount += 1;
+      continue;
+    }
+    if (order.statusCategory === "IN_APPEAL") {
+      appealCount += 1;
+      continue;
+    }
+    if (order.statusCategory !== "COMPLETED") {
+      inProgressCount += 1;
+      continue;
+    }
+
+    // Únicamente órdenes COMPLETED suman al volumen y ganancias
+    const amt = new Decimal(order.amountUsdt || "0");
+    const price = new Decimal(order.unitPriceVes || "0");
+    const total = new Decimal(order.totalPriceVes || "0");
+
+    if (order.tradeType === "SELL") {
+      completedSellCount += 1;
+      totalSoldUsdt = totalSoldUsdt.plus(amt);
+      totalSoldVes = totalSoldVes.plus(total);
+      sumSellUnitPrices = sumSellUnitPrices.plus(price);
+    } else {
+      completedBuyCount += 1;
+      totalBoughtUsdt = totalBoughtUsdt.plus(amt);
+      totalBoughtVes = totalBoughtVes.plus(total);
+      sumBuyUnitPrices = sumBuyUnitPrices.plus(price);
+    }
+  }
+
+  // 1. Precios Promedio Totales
+  const avgSellWeighted = totalSoldUsdt.gt(0)
+    ? totalSoldVes.div(totalSoldUsdt)
+    : new Decimal(0);
+  const avgBuyWeighted = totalBoughtUsdt.gt(0)
+    ? totalBoughtVes.div(totalBoughtUsdt)
+    : new Decimal(0);
+
+  const avgSellSimple =
+    completedSellCount > 0
+      ? sumSellUnitPrices.div(completedSellCount)
+      : new Decimal(0);
+  const avgBuySimple =
+    completedBuyCount > 0
+      ? sumBuyUnitPrices.div(completedBuyCount)
+      : new Decimal(0);
+
+  const activeAvgSell = avgMode === "SIMPLE" ? avgSellSimple : avgSellWeighted;
+  const activeAvgBuy = avgMode === "SIMPLE" ? avgBuySimple : avgBuyWeighted;
+
+  // 2. Brecha de Puntos (solo cuando ambos lados tienen volumen completado)
+  const hasBothSides = totalSoldUsdt.gt(0) && totalBoughtUsdt.gt(0);
+  const brechaPoints = hasBothSides
+    ? activeAvgSell.minus(activeAvgBuy)
+    : new Decimal(0);
+
+  const spreadPct =
+    hasBothSides && activeAvgBuy.gt(0)
+      ? brechaPoints.div(activeAvgBuy).mul(100)
+      : new Decimal(0);
+
+  // 3. Volumen de la Vuelta y Excedente Pendiente
+  const vueltaVolumeUsdt = Decimal.min(totalSoldUsdt, totalBoughtUsdt);
+  const diffUsdt = totalSoldUsdt.minus(totalBoughtUsdt);
+
+  let pendingDirection: "NONE" | "BUY_BACK" | "SELL_OUT" = "NONE";
+  let pendingUsdtDec = new Decimal(0);
+  if (diffUsdt.gt(0)) {
+    pendingDirection = "BUY_BACK";
+    pendingUsdtDec = diffUsdt;
+  } else if (diffUsdt.lt(0)) {
+    pendingDirection = "SELL_OUT";
+    pendingUsdtDec = diffUsdt.abs();
+  }
+
+  // 4. Ganancia Bruta de la Vuelta
+  const grossProfitBs = vueltaVolumeUsdt.mul(brechaPoints);
+  const grossProfitUsdt = activeAvgBuy.gt(0)
+    ? grossProfitBs.div(activeAvgBuy)
+    : new Decimal(0);
+
+  // 5. Volumen Total Movido y Comisión por Insignia
+  const totalVolumeUsdt = totalSoldUsdt.plus(totalBoughtUsdt);
+  const badgeFactorDec = new Decimal(badgeMeta.feeFactor);
+  const volumeCommissionUsdt = totalVolumeUsdt.mul(badgeFactorDec);
+  const rateForCommissionBs = activeAvgBuy.gt(0) ? activeAvgBuy : activeAvgSell;
+  const volumeCommissionBs = volumeCommissionUsdt.mul(rateForCommissionBs);
+
+  // 6. Ganancia Neta Final (descontando Comisión de Insignia sobre el Volumen Total)
+  const netProfitUsdt = grossProfitUsdt.minus(volumeCommissionUsdt);
+  const netProfitBs = grossProfitBs.minus(volumeCommissionBs);
+
+  const totalCompletedCount = completedSellCount + completedBuyCount;
+
+  return {
+    period,
+    periodLabel,
+    method,
+    avgMode,
+    merchantBadge: badgeMeta.id,
+    merchantBadgeLabel: badgeMeta.label,
+    badgeFeePercent: String(badgeMeta.feePercent),
+    badgeFeeFactor: badgeMeta.feeFactor,
+
+    totalSoldUsdt: formatDecimalMoney(totalSoldUsdt, 2),
+    totalSoldVes: formatDecimalMoney(totalSoldVes, 2),
+    totalBoughtUsdt: formatDecimalMoney(totalBoughtUsdt, 2),
+    totalBoughtVes: formatDecimalMoney(totalBoughtVes, 2),
+    totalVolumeUsdt: formatDecimalMoney(totalVolumeUsdt, 2),
+
+    avgSellRateWeightedVes: formatDecimalMoney(avgSellWeighted, 2),
+    avgBuyRateWeightedVes: formatDecimalMoney(avgBuyWeighted, 2),
+    avgSellRateSimpleVes: formatDecimalMoney(avgSellSimple, 2),
+    avgBuyRateSimpleVes: formatDecimalMoney(avgBuySimple, 2),
+    activeAvgSellRateVes: formatDecimalMoney(activeAvgSell, 2),
+    activeAvgBuyRateVes: formatDecimalMoney(activeAvgBuy, 2),
+    brechaPointsVes: `${brechaPoints.gte(0) ? "+" : ""}${brechaPoints.toFixed(2)}`,
+    averageSpreadPercent: `${spreadPct.gte(0) ? "+" : ""}${spreadPct.toFixed(2)}%`,
+
+    vueltaVolumeUsdt: formatDecimalMoney(vueltaVolumeUsdt, 2),
+    pendingDirection,
+    pendingUsdt: formatDecimalMoney(pendingUsdtDec, 2),
+
+    grossProfitVes: formatDecimalMoney(grossProfitBs, 2),
+    grossProfitUsdt: grossProfitUsdt.toFixed(2),
+    volumeCommissionUsdt: volumeCommissionUsdt.toFixed(2),
+    volumeCommissionVes: formatDecimalMoney(volumeCommissionBs, 2),
+    netProfitUsdt: netProfitUsdt.toFixed(2),
+    netProfitVes: formatDecimalMoney(netProfitBs, 2),
+    isNetProfitNegative: netProfitUsdt.lt(0),
+
+    completedSellCount,
+    completedBuyCount,
+    cancelledCount,
+    appealCount,
+    inProgressCount,
+    totalOrdersInPeriod: orders.length,
+    reconciledOrdersCount: totalCompletedCount,
+
+    // Campos compatibles para módulos auxiliares
+    netFreeProfitUsdt: netProfitUsdt.toFixed(2),
+    netFreeProfitVes: formatDecimalMoney(netProfitBs, 2),
+    seniatTax16Usdt: "0.00",
+    seniatTax16Ves: "0.00",
+    seniatTaxRatePercent: String(seniatTaxPercent),
+    makerFeeRatePercent: String(badgeMeta.feePercent),
+    exemptCapitalUsdt: formatDecimalMoney(totalBoughtUsdt, 2),
+    exemptCapitalVes: formatDecimalMoney(totalBoughtVes, 2),
+    currentWacCostVes: activeAvgBuy.toFixed(2),
+    availableVaultUsdt: formatDecimalMoney(pendingUsdtDec, 2),
+    totalBinanceFeesUsdt: volumeCommissionUsdt.toFixed(2),
+    nextClosingTimeVet: "11:59 PM (-4:00 UTC)",
+    lastSyncSecondsAgo: 2,
+    workingCapitalUsdt: formatDecimalMoney(totalVolumeUsdt, 2),
+    workingCapitalVes: formatDecimalMoney(totalSoldVes.plus(totalBoughtVes), 2),
+  };
+}
+
+function resolvePeriodBounds(params: {
+  readonly period: PeriodFilter;
+  readonly date?: string;
+  readonly month?: string;
+}): {
+  readonly startMs: number | null;
+  readonly endMs: number | null;
+  readonly periodLabel: string;
+} {
+  const { period, date, month } = params;
+
+  if (period === "ALL") {
+    return {
+      startMs: null,
+      endMs: null,
+      periodLabel: "Espejo Completo Binance (Todos los registros)",
+    };
+  }
+
+  if (period === "DAY" || (date && /^\d{4}-\d{2}-\d{2}$/.test(date))) {
+    const targetIso =
+      date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : getCurrentVetDateIso();
+    const range = getVetDayRangeMs(targetIso);
+    return {
+      startMs: range.startMs,
+      endMs: range.endMs,
+      periodLabel: `Día ${range.labelEs} (-4:00 UTC)`,
+    };
+  }
+
+  if (
+    period === "MONTH" ||
+    (month && /^\d{4}-\d{2}$/.test(month))
+  ) {
+    const targetMonth =
+      month && /^\d{4}-\d{2}$/.test(month) ? month : getCurrentVetMonthIso();
+    const range = getVetMonthRangeMs(targetMonth);
+    return {
+      startMs: range.startMs,
+      endMs: range.endMs,
+      periodLabel: `Mes ${range.labelEs}`,
+    };
+  }
+
+  if (period === "7D") {
+    const now = Date.now();
+    return {
+      startMs: now - 7 * 86_400_000,
+      endMs: now + 60_000,
+      periodLabel: "Últimos 7 días",
+    };
+  }
+
+  if (period === "30D") {
+    const now = Date.now();
+    return {
+      startMs: now - 30 * 86_400_000,
+      endMs: now + 60_000,
+      periodLabel: "Últimos 30 días",
+    };
+  }
+
+  // Por defecto: TODAY (00:00:00 a 23:59:59 VET)
+  const todayIso = getCurrentVetDateIso();
+  const todayRange = getVetDayRangeMs(todayIso);
+  return {
+    startMs: todayRange.startMs,
+    endMs: todayRange.endMs,
+    periodLabel: `Hoy ${todayRange.labelEs} (-4:00 UTC)`,
+  };
+}
+
 export class P2PAccountingService {
   private static readonly lastSyncTimestampByUser = new Map<string, number>();
   private static readonly inFlightSyncByUser = new Map<
     string,
-    Promise<readonly RawCompletedOrderInput[]>
+    Promise<readonly P2POrderRowDto[]>
   >();
+
   /**
-   * Prueba en vivo si las credenciales conectadas a la Bóveda responden con éxito en Binance SAPI.
+   * Prueba en vivo si las credenciales conectadas responden con éxito en Binance SAPI.
    */
   public static async testBinanceConnection(userId: string): Promise<{
     readonly success: boolean;
@@ -385,7 +744,7 @@ export class P2PAccountingService {
           return {
             success: false,
             message:
-              "Binance detectó que tu conexión actual o ruta de internet fue asignada momentáneamente a un nodo con restricción geográfica. Si tienes un proxy o extensión de red activa, cámbiala a Colombia/Panamá/España o desactívala; si estás en conexión local de Venezuela sin VPN, reintenta en breve mientras tu proveedor refresca la ruta.",
+              "Binance detectó restricción geográfica en la ruta actual. Revisa proxy/VPN o reintenta en breve.",
             errorDetails: lastErrorMsg,
           };
         }
@@ -397,13 +756,12 @@ export class P2PAccountingService {
         };
       }
 
-      // Sincronizar órdenes inmediatamente
       this.lastSyncTimestampByUser.delete(userId);
       const synced = await this.getUserOrdersFromVaultOrBinance(userId, true);
 
       return {
         success: true,
-        message: `¡Conexión verificada exitosamente con Binance! Se detectaron ${synced.length} órdenes conciliadas en tu historial.`,
+        message: `¡Conexión verificada exitosamente con Binance! Se sincronizaron ${synced.length} órdenes del espejo P2P.`,
         orderCount: synced.length,
       };
     } catch (err) {
@@ -417,140 +775,87 @@ export class P2PAccountingService {
   }
 
   /**
-   * Si el usuario tiene credenciales SAPI de Binance conectadas, sincroniza sus órdenes
-   * reales consultando tanto BUY como SELL en paralelo desde `/sapi/v1/c2c/orderMatch/listUserOrderHistory`.
-   * Si no tiene llaves o aún no ha operado, devuelve su lista real en base de datos.
+   * Sincroniza desde Binance un rango específico (ej. Día o Mes completo paginado de 100 en 100)
+   * y guarda todas las órdenes (todos los estados/tipos) en la base de datos.
+   */
+  public static async syncBinanceRange(
+    userId: string,
+    startMs: number,
+    endMs: number
+  ): Promise<readonly P2POrderRowDto[]> {
+    const credential =
+      await SupabaseVaultRepository.getBinanceCredential(userId);
+    if (!credential) {
+      const stored = await SupabaseVaultRepository.getUserOrders(userId);
+      return stored.map(toMirrorOrderDto);
+    }
+
+    try {
+      const { apiKey, apiSecret } = decryptBinanceCredentials(
+        credential.apiKeyEncrypted,
+        credential.iv,
+        credential.authTag
+      );
+
+      const [buyRes, sellRes] = await Promise.all([
+        fetchBinanceOrdersInRange(apiKey, apiSecret, "BUY", startMs, endMs),
+        fetchBinanceOrdersInRange(apiKey, apiSecret, "SELL", startMs, endMs),
+      ]);
+
+      const combined = [...buyRes.data, ...sellRes.data];
+      if (combined.length > 0) {
+        const records = mapRawItemsToStoredRecords(userId, combined);
+        await SupabaseVaultRepository.saveUserOrders(userId, records);
+        this.lastSyncTimestampByUser.set(userId, Date.now());
+      }
+    } catch (err) {
+      console.error(
+        "[P2PAccountingService] Error sincronizando rango desde Binance:",
+        err
+      );
+    }
+
+    const storedAfter = await SupabaseVaultRepository.getUserOrders(userId);
+    return storedAfter.map(toMirrorOrderDto);
+  }
+
+  /**
+   * Obtiene el espejo exacto de órdenes Binance P2P (todos los tipos y estados,
+   * orden cronológico idéntico createTime DESC sin agrupar ni alterar).
    */
   public static async getUserOrdersFromVaultOrBinance(
     userId: string,
     forceFresh: boolean = false
-  ): Promise<readonly RawCompletedOrderInput[]> {
+  ): Promise<readonly P2POrderRowDto[]> {
     const credential =
       await SupabaseVaultRepository.getBinanceCredential(userId);
 
     if (!credential) {
-      return SupabaseVaultRepository.getUserOrders(userId);
+      const stored = await SupabaseVaultRepository.getUserOrders(userId);
+      return stored.map(toMirrorOrderDto);
     }
 
     const now = Date.now();
     const lastSync = this.lastSyncTimestampByUser.get(userId) ?? 0;
 
-    // Si se sincronizó hace menos de 6 segundos y no se solicita refresco forzado,
-    // leemos directo de la base de datos para responder de forma ultrarrápida y no saturar Binance
     if (!forceFresh && now - lastSync < 6000) {
-      return SupabaseVaultRepository.getUserOrders(userId);
+      const cached = await SupabaseVaultRepository.getUserOrders(userId);
+      return cached.map(toMirrorOrderDto);
     }
 
-    // Si ya existe una sincronización en curso para este usuario (por ejemplo, /summary y /orders concurrentes)
     const activePromise = this.inFlightSyncByUser.get(userId);
     if (activePromise) {
       return activePromise;
     }
 
-    const syncPromise = (async () => {
+    const syncPromise = (async (): Promise<readonly P2POrderRowDto[]> => {
       try {
-        const { apiKey, apiSecret } = decryptBinanceCredentials(
-          credential.apiKeyEncrypted,
-          credential.iv,
-          credential.authTag
-        );
-
-        // Binance SAPI requiere dos llamadas paralelas para BUY y SELL
-        const [buyRes, sellRes] = await Promise.all([
-          fetchBinanceOrdersBySide(apiKey, apiSecret, "BUY"),
-          fetchBinanceOrdersBySide(apiKey, apiSecret, "SELL"),
-        ]);
-
-        const allRawItems: BinanceC2COrderItem[] = [
-          ...buyRes.data,
-          ...sellRes.data,
-        ];
-
-        if (allRawItems.length > 0) {
-          // Filtrar órdenes completadas (status "COMPLETED" o código 4)
-          const completed = allRawItems.filter(
-            (o) =>
-              o.orderStatus === "COMPLETED" ||
-              String(o.orderStatus) === "4"
-          );
-
-          // Ordenar cronológicamente (más recientes primero)
-          completed.sort((a, b) => (b.createTime || 0) - (a.createTime || 0));
-
-          // Calculamos costo base promedio de las compras reales
-          const buyOrders = completed.filter((o) => o.tradeType === "BUY");
-          let avgBuyRate = new Decimal("0");
-          if (buyOrders.length > 0) {
-            const sumRates = buyOrders.reduce(
-              (acc, b) => acc.plus(new Decimal(b.unitPrice || "0")),
-              new Decimal(0)
-            );
-            avgBuyRate = sumRates.div(buyOrders.length);
-          }
-
-          const syncedRecords: StoredP2POrderRecord[] = completed.map((o) => {
-            const d = new Date(o.createTime);
-            const dateStr = d.toLocaleDateString("es-VE", {
-              timeZone: "America/Caracas",
-              day: "2-digit",
-              month: "2-digit",
-              year: "numeric",
-            });
-            const timeStr = d.toLocaleTimeString("es-VE", {
-              timeZone: "America/Caracas",
-              hour: "2-digit",
-              minute: "2-digit",
-              second: "2-digit",
-            });
-            const timeVetLabel = `${dateStr} • ${timeStr}`;
-            const unitPriceDec = new Decimal(o.unitPrice || "0");
-            const amountUsdtDec = new Decimal(o.amount || "0");
-            const fallbackBasis = avgBuyRate.gt(0)
-              ? avgBuyRate
-              : unitPriceDec;
-
-            // Comisión oficial Maker 0.163%
-            const commNum = o.commission ? parseFloat(o.commission) : 0;
-            const commissionUsdt =
-              commNum > 0
-                ? new Decimal(o.commission!).toFixed(4)
-                : amountUsdtDec.times("0.00163").toFixed(4);
-
-            return {
-              orderNumber: String(o.orderNumber),
-              userId,
-              timeVetLabel,
-              tradeType: o.tradeType === "BUY" ? "BUY" : "SELL",
-              advertisementRole:
-                o.advertisementRole === "TAKER" ? "TAKER" : "MAKER",
-              payMethodName: normalizePayMethod(o.payMethodName),
-              counterPartNickName: o.counterPartNickName || "Cliente P2P",
-              amountUsdt: amountUsdtDec.toFixed(2),
-              commissionUsdt,
-              unitPriceVes: unitPriceDec.toFixed(2),
-              costBasisRateVes: fallbackBasis.toFixed(2),
-            };
-          });
-
-          if (syncedRecords.length > 0) {
-            await SupabaseVaultRepository.saveUserOrders(
-              userId,
-              syncedRecords
-            );
-            P2PAccountingService.lastSyncTimestampByUser.set(userId, Date.now());
-            return SupabaseVaultRepository.getUserOrders(userId);
-          }
-        }
-      } catch (err) {
-        console.error(
-          "[P2PAccountingService] Error en sincronización con Binance:",
-          err
-        );
+        const endMs = Date.now() + 60_000;
+        const startMs = Date.now() - MAX_BINANCE_WINDOW_MS;
+        return await this.syncBinanceRange(userId, startMs, endMs);
       } finally {
         P2PAccountingService.inFlightSyncByUser.delete(userId);
       }
-
-      return SupabaseVaultRepository.getUserOrders(userId);
     })();
 
     this.inFlightSyncByUser.set(userId, syncPromise);
@@ -558,135 +863,60 @@ export class P2PAccountingService {
   }
 
   /**
-   * Calcula el Resumen P&L real del usuario autenticado.
-   * Si es una cuenta nueva sin órdenes, todos los valores contables inician en 0.00.
+   * Calcula los KPIs en tiempo real usando el motor por "Vuelta" y Brecha de Puntos
+   * con la insignia persistente del usuario.
    */
-  public static async getSummary(
-    userId: string,
-    period: PeriodFilter,
-    method: LotMethod
-  ): Promise<PnlSummaryDto> {
-    const [rawOrders, benchmark, taxConfig] = await Promise.all([
-      this.getUserOrdersFromVaultOrBinance(userId),
-      BinanceP2PLiveService.getLiveMarketBenchmark(),
-      SupabaseVaultRepository.getUserTaxConfig(userId),
+  public static async getSummary(params: {
+    readonly userId: string;
+    readonly period: PeriodFilter;
+    readonly method: LotMethod;
+    readonly avgMode: AveragePriceMode;
+    readonly date?: string;
+    readonly month?: string;
+  }): Promise<PnlSummaryDto> {
+    const [allMirrorOrders, taxConfig] = await Promise.all([
+      this.getUserOrdersFromVaultOrBinance(params.userId),
+      SupabaseVaultRepository.getUserTaxConfig(params.userId),
     ]);
 
-    const liveRate = new Decimal(benchmark.benchmarkSellRateVes);
-    const liveBuyRate = new Decimal(benchmark.benchmarkBuyRateVes);
-
-    // Fecha actual en Venezuela (America/Caracas, UTC-4) para el ciclo diario de 24 horas
-    const todayVetStr = new Date().toLocaleDateString("es-VE", {
-      timeZone: "America/Caracas",
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
+    const bounds = resolvePeriodBounds({
+      period: params.period,
+      date: params.date,
+      month: params.month,
     });
 
-    // En ciclo diario (TODAY), consideramos únicamente las órdenes dentro de las 24h de hoy
-    const scopedOrders =
-      period === "TODAY"
-        ? rawOrders.filter((o) => o.timeVetLabel.includes(todayVetStr))
-        : rawOrders;
+    const periodOrders =
+      bounds.startMs !== null && bounds.endMs !== null
+        ? allMirrorOrders.filter(
+            (o) =>
+              o.createTimeMs >= bounds.startMs! &&
+              o.createTimeMs <= bounds.endMs!
+          )
+        : allMirrorOrders;
 
-    const computedRows = scopedOrders.map((o) =>
-      calculateOrderFiscalMetrics(o, taxConfig)
-    );
-
-    let totalGrossVes = new Decimal(0);
-    let totalTaxVes = new Decimal(0);
-    let totalNetVes = new Decimal(0);
-    let totalExemptVes = new Decimal(0);
-    let totalFeesUsdt = new Decimal(0);
-    let sellOrdersCount = 0;
-    let totalMarginPct = new Decimal(0);
-
-    let totalBoughtNetUsdt = new Decimal(0);
-    let totalSoldUsdt = new Decimal(0);
-
-    for (const row of computedRows) {
-      totalFeesUsdt = totalFeesUsdt.plus(new Decimal(row.commissionUsdt));
-
-      if (row.tradeType === "BUY") {
-        totalBoughtNetUsdt = totalBoughtNetUsdt.plus(
-          new Decimal(row.netBuyUsdt ?? row.amountUsdt)
-        );
-      } else {
-        sellOrdersCount += 1;
-        totalSoldUsdt = totalSoldUsdt.plus(new Decimal(row.amountUsdt));
-        const netVes = new Decimal(row.netFreeProfitVes);
-        const taxVes = new Decimal(row.seniatTax16Ves);
-        totalNetVes = totalNetVes.plus(netVes);
-        totalTaxVes = totalTaxVes.plus(taxVes);
-        totalGrossVes = totalGrossVes.plus(netVes.plus(taxVes));
-        totalExemptVes = totalExemptVes.plus(new Decimal(row.exemptCapitalVes));
-        totalMarginPct = totalMarginPct.plus(new Decimal(row.marginPercent));
-      }
-    }
-
-    const periodMultiplier = new Decimal(1);
-
-    const scaledNetVes = totalNetVes.mul(periodMultiplier);
-    const scaledTaxVes = totalTaxVes.mul(periodMultiplier);
-    const scaledGrossVes = totalGrossVes.mul(periodMultiplier);
-    const scaledExemptVes = totalExemptVes.mul(periodMultiplier);
-    const scaledFeesUsdt = totalFeesUsdt.mul(periodMultiplier);
-
-    const avgSpread =
-      sellOrdersCount > 0
-        ? totalMarginPct.div(sellOrdersCount)
-        : new Decimal("0.00");
-
-    const availableInventoryUsdt = Decimal.max(
-      new Decimal(0),
-      totalBoughtNetUsdt.minus(totalSoldUsdt)
-    );
-
-    const formatMoney = (val: Decimal) =>
-      val.toNumber().toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
-
-    return {
-      period,
-      method,
-      reconciledOrdersCount: computedRows.length,
-      averageSpreadPercent: `${avgSpread.gte(0) ? "+" : ""}${avgSpread.toFixed(2)}%`,
-      netFreeProfitUsdt: liveRate.gt(0)
-        ? scaledNetVes.div(liveRate).toFixed(2)
-        : "0.00",
-      netFreeProfitVes: formatMoney(scaledNetVes),
-      grossProfitUsdt: liveRate.gt(0)
-        ? scaledGrossVes.div(liveRate).toFixed(2)
-        : "0.00",
-      grossProfitVes: formatMoney(scaledGrossVes),
-      seniatTax16Usdt: liveRate.gt(0)
-        ? scaledTaxVes.div(liveRate).toFixed(2)
-        : "0.00",
-      seniatTax16Ves: formatMoney(scaledTaxVes),
-      seniatTaxRatePercent: String(taxConfig.seniatTaxPercent),
-      makerFeeRatePercent: String(taxConfig.makerFeePercent),
-      exemptCapitalUsdt: liveBuyRate.gt(0)
-        ? formatMoney(scaledExemptVes.div(liveBuyRate))
-        : "0.00",
-      exemptCapitalVes: formatMoney(scaledExemptVes),
-      currentWacCostVes: liveBuyRate.toFixed(2),
-      availableVaultUsdt: formatMoney(availableInventoryUsdt),
-      totalBinanceFeesUsdt: scaledFeesUsdt.toFixed(2),
-      nextClosingTimeVet: "11:59 PM VET",
-      lastSyncSecondsAgo: 2,
-    };
+    return calculateVueltaSummary({
+      orders: periodOrders,
+      period: params.period,
+      periodLabel: bounds.periodLabel,
+      method: params.method,
+      avgMode: params.avgMode,
+      badge: taxConfig.merchantBadge,
+      seniatTaxPercent: taxConfig.seniatTaxPercent,
+    });
   }
 
   /**
-   * Devuelve las órdenes paginadas y filtradas por tipo, banco y fecha del usuario autenticado.
+   * Devuelve el espejo exacto de órdenes paginado manteniendo el orden cronológico de Binance.
+   * No elimina órdenes canceladas ni apeladas salvo que el usuario elija un filtro explícito.
    */
   public static async getPaginatedOrders(params: {
     readonly userId: string;
+    readonly period?: PeriodFilter;
     readonly tradeType: TradeTypeFilter;
+    readonly status?: OrderStatusFilter;
     readonly bank?: string;
     readonly date?: string;
+    readonly month?: string;
     readonly page: number;
     readonly limit: number;
   }): Promise<{
@@ -694,78 +924,65 @@ export class P2PAccountingService {
     readonly totalCount: number;
     readonly sellCount: number;
     readonly buyCount: number;
+    readonly completedCount: number;
+    readonly cancelledCount: number;
+    readonly appealCount: number;
+    readonly inProgressCount: number;
     readonly availableDates: readonly string[];
   }> {
-    const [rawOrders, taxConfig] = await Promise.all([
-      this.getUserOrdersFromVaultOrBinance(params.userId),
-      SupabaseVaultRepository.getUserTaxConfig(params.userId),
-    ]);
-    const allComputed = rawOrders.map((o) =>
-      calculateOrderFiscalMetrics(o, taxConfig)
-    );
+    const allOrders = await this.getUserOrdersFromVaultOrBinance(params.userId);
 
-    // Fecha actual en Venezuela (America/Caracas)
-    const todayVetStr = new Date().toLocaleDateString("es-VE", {
-      timeZone: "America/Caracas",
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-    });
-
-    // Extraer fechas únicas disponibles en el historial (formato DD/MM/YYYY)
     const dateSet = new Set<string>();
-    for (const ord of allComputed) {
-      const dt = ord.timeVetLabel.split("•")[0]?.trim();
-      if (dt && /^\d{2}\/\d{2}\/\d{4}$/.test(dt)) {
-        dateSet.add(dt);
+    for (const ord of allOrders) {
+      if (ord.dateLabelVet) {
+        dateSet.add(ord.dateLabelVet);
       }
     }
-    const availableDates = Array.from(dateSet).sort((a, b) => {
-      const [da, ma, ya] = a.split("/").map(Number);
-      const [db, mb, yb] = b.split("/").map(Number);
-      return (
-        new Date(yb || 0, (mb || 1) - 1, db || 0).getTime() -
-        new Date(ya || 0, (ma || 1) - 1, da || 0).getTime()
-      );
-    });
+    const availableDates = Array.from(dateSet);
 
-    // Formatear filtro de fecha si viene en YYYY-MM-DD o DD/MM/YYYY
-    let targetDate = "";
-    if (params.date === "ALL") {
-      targetDate = "";
-    } else if (params.date && params.date.trim() !== "") {
-      const trimmed = params.date.trim();
-      if (trimmed === "TODAY") {
-        targetDate = todayVetStr;
-      } else if (trimmed.includes("-")) {
-        const parts = trimmed.split("-");
-        if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
-          targetDate = `${parts[2].padStart(2, "0")}/${parts[1].padStart(2, "0")}/${parts[0]}`;
+    // Filtrado únicamente por parámetros explícitos del usuario (por defecto period="ALL", status="ALL")
+    const effectivePeriod: PeriodFilter =
+      params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date)
+        ? "DAY"
+        : params.month && /^\d{4}-\d{2}$/.test(params.month)
+          ? "MONTH"
+          : (params.period ?? "ALL");
+
+    const bounds =
+      effectivePeriod === "ALL" && !params.date && !params.month
+        ? { startMs: null, endMs: null }
+        : resolvePeriodBounds({
+            period: effectivePeriod,
+            date: params.date,
+            month: params.month,
+          });
+
+    const filtered = allOrders.filter((order) => {
+      if (bounds.startMs !== null && bounds.endMs !== null) {
+        if (
+          order.createTimeMs < bounds.startMs ||
+          order.createTimeMs > bounds.endMs
+        ) {
+          return false;
         }
-      } else {
-        targetDate = trimmed;
       }
-    } else {
-      // Si no se envía fecha, por defecto se enfoca en el ciclo de 24 horas de hoy
-      // Pero si hoy aún no tiene órdenes y hay órdenes previas, se selecciona la fecha más reciente
-      const hasTodayOrders = allComputed.some((o) =>
-        o.timeVetLabel.includes(todayVetStr)
-      );
-      targetDate = hasTodayOrders ? todayVetStr : (availableDates[0] ?? todayVetStr);
-    }
-
-    const filtered = allComputed.filter((order) => {
       if (params.tradeType !== "ALL" && order.tradeType !== params.tradeType) {
+        return false;
+      }
+      if (
+        params.status &&
+        params.status !== "ALL" &&
+        order.statusCategory !== params.status
+      ) {
         return false;
       }
       if (
         params.bank &&
         params.bank.trim() !== "" &&
-        order.payMethodName.toLowerCase() !== params.bank.trim().toLowerCase()
+        !order.payMethodName
+          .toLowerCase()
+          .includes(params.bank.trim().toLowerCase())
       ) {
-        return false;
-      }
-      if (targetDate && !order.timeVetLabel.includes(targetDate)) {
         return false;
       }
       return true;
@@ -773,6 +990,18 @@ export class P2PAccountingService {
 
     const sellCount = filtered.filter((o) => o.tradeType === "SELL").length;
     const buyCount = filtered.filter((o) => o.tradeType === "BUY").length;
+    const completedCount = filtered.filter(
+      (o) => o.statusCategory === "COMPLETED"
+    ).length;
+    const cancelledCount = filtered.filter(
+      (o) => o.statusCategory === "CANCELLED"
+    ).length;
+    const appealCount = filtered.filter(
+      (o) => o.statusCategory === "IN_APPEAL"
+    ).length;
+    const inProgressCount = filtered.filter(
+      (o) => o.statusCategory === "IN_PROGRESS"
+    ).length;
 
     const startIndex = (params.page - 1) * params.limit;
     const pagedItems = filtered.slice(startIndex, startIndex + params.limit);
@@ -782,12 +1011,80 @@ export class P2PAccountingService {
       totalCount: filtered.length,
       sellCount,
       buyCount,
+      completedCount,
+      cancelledCount,
+      appealCount,
+      inProgressCount,
       availableDates,
     };
   }
 
   /**
-   * Devuelve las Actas de Cierre Diario (11:59 PM VET) y el estado real de la Bóveda API del usuario.
+   * Construye el reporte completo de Cierre del Día o Cierre del Mes sincronizando
+   * todas las páginas de Binance SAPI para el período solicitado.
+   */
+  public static async buildClosingReport(params: {
+    readonly userId: string;
+    readonly scope: "DAY" | "MONTH";
+    readonly date?: string;
+    readonly month?: string;
+    readonly avgMode: AveragePriceMode;
+  }): Promise<ClosingReportData> {
+    const taxConfig = await SupabaseVaultRepository.getUserTaxConfig(
+      params.userId
+    );
+
+    const range =
+      params.scope === "MONTH"
+        ? getVetMonthRangeMs(params.month || getCurrentVetMonthIso())
+        : getVetDayRangeMs(params.date || getCurrentVetDateIso());
+
+    const periodKey =
+      params.scope === "MONTH"
+        ? (params.month || getCurrentVetMonthIso())
+        : (params.date || getCurrentVetDateIso());
+
+    // Sincronización exhaustiva paginada en bloques <= 28d desde Binance para no omitir ninguna orden
+    const allSynced = await this.syncBinanceRange(
+      params.userId,
+      range.startMs,
+      range.endMs
+    );
+
+    // Respetar orden cronológico exacto dentro del rango (00:00:00 a 23:59:59 hora Venezuela)
+    const periodOrders = allSynced.filter(
+      (o) => o.createTimeMs >= range.startMs && o.createTimeMs <= range.endMs
+    );
+
+    const periodLabel =
+      params.scope === "MONTH"
+        ? `Cierre Mensual: ${range.labelEs} (-4:00 UTC)`
+        : `Cierre Diario: ${range.labelEs} (00:00:00 - 23:59:59 VET)`;
+
+    const summary = calculateVueltaSummary({
+      orders: periodOrders,
+      period: params.scope === "MONTH" ? "MONTH" : "DAY",
+      periodLabel,
+      method: "FIFO",
+      avgMode: params.avgMode,
+      badge: taxConfig.merchantBadge,
+      seniatTaxPercent: taxConfig.seniatTaxPercent,
+    });
+
+    const nowVet = formatVetOrderTimestamp(Date.now());
+
+    return {
+      scope: params.scope,
+      periodKey,
+      periodLabel,
+      generatedAtVet: `${nowVet.dateTimeLabel} (-4:00 UTC)`,
+      summary,
+      orders: periodOrders,
+    };
+  }
+
+  /**
+   * Actas de cierre diario guardadas y estado de la Bóveda API del usuario.
    */
   public static async getDailyClosings(userId: string): Promise<{
     readonly monthGrossUsdt: string;
@@ -829,19 +1126,13 @@ export class P2PAccountingService {
       netVes = netVes.plus(parseNum(c.netFreeProfitVes));
     }
 
-    const formatMoney = (val: Decimal) =>
-      val.toNumber().toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
-
     return {
-      monthGrossUsdt: formatMoney(grossUsdt),
-      monthGrossVes: formatMoney(grossVes),
-      monthSeniatTax16Usdt: formatMoney(taxUsdt),
-      monthSeniatTax16Ves: formatMoney(taxVes),
-      monthNetFreeUsdt: formatMoney(netUsdt),
-      monthNetFreeVes: formatMoney(netVes),
+      monthGrossUsdt: formatDecimalMoney(grossUsdt),
+      monthGrossVes: formatDecimalMoney(grossVes),
+      monthSeniatTax16Usdt: formatDecimalMoney(taxUsdt),
+      monthSeniatTax16Ves: formatDecimalMoney(taxVes),
+      monthNetFreeUsdt: formatDecimalMoney(netUsdt),
+      monthNetFreeVes: formatDecimalMoney(netVes),
       closings,
       vaultStatus: {
         isConfigured: Boolean(credential),
@@ -855,9 +1146,6 @@ export class P2PAccountingService {
     };
   }
 
-  /**
-   * Cifra con AES-256-GCM y guarda las credenciales SAPI de Binance en Supabase para el usuario.
-   */
   public static async saveBinanceVaultCredentials(params: {
     readonly userId: string;
     readonly label: string;
@@ -888,31 +1176,33 @@ export class P2PAccountingService {
       isReadOnlyVerified: true,
       withdrawalsBlocked: true,
       spotTradingBlocked: true,
-      updatedAtVet: new Date().toLocaleTimeString("es-VE", {
-        timeZone: "America/Caracas",
-      }),
+      updatedAtVet: formatVetOrderTimestamp(Date.now()).timeLabel,
     };
   }
 
-  /**
-   * Monitor de Brechas en Bancos Nacionales (consulta en vivo a Binance P2P).
-   */
   public static async getVenezuelanBanksMonitor(
     amount: number = 5000
   ): Promise<readonly BankLiveMonitorDto[]> {
     return BinanceP2PLiveService.getLiveBrechas(amount);
   }
 
-  /**
-   * Obtiene la configuración de porcentajes impositivos y comisiones del usuario.
-   */
+  public static async getMerchantBadgeConfig(
+    userId: string
+  ): Promise<MerchantBadgeConfigDto> {
+    return SupabaseVaultRepository.getMerchantBadgeConfig(userId);
+  }
+
+  public static async updateMerchantBadgeConfig(
+    userId: string,
+    badge: MerchantBadgeType
+  ): Promise<MerchantBadgeConfigDto> {
+    return SupabaseVaultRepository.saveMerchantBadgeConfig(userId, badge);
+  }
+
   public static async getUserTaxConfig(userId: string) {
     return SupabaseVaultRepository.getUserTaxConfig(userId);
   }
 
-  /**
-   * Actualiza la configuración de porcentajes impositivos y comisiones del usuario.
-   */
   public static async updateUserTaxConfig(
     userId: string,
     input: { seniatTaxPercent: number; makerFeePercent: number }

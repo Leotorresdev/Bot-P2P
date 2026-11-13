@@ -2,19 +2,14 @@
 
 import * as React from "react";
 import {
-  ArrowUpRight,
-  ArrowDownLeft,
-  Search,
-  ChevronDown,
-  ChevronUp,
-  Sparkles,
-  Wallet,
-  PiggyBank,
-  CheckCircle2,
-  X,
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  FileSpreadsheet,
+  Filter,
   RefreshCw,
-  Calendar,
-  Download,
+  Search,
+  X,
 } from "lucide-react";
 import {
   useP2POrdersQuery,
@@ -22,271 +17,249 @@ import {
   useSyncBinanceMutation,
 } from "@/features/p2p-ledger/api/use-p2p-queries";
 import type {
+  AveragePriceMode,
+  OrderStatusFilter,
   PeriodFilter,
   TradeTypeFilter,
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
+import { useLedgerUiStore } from "@/features/p2p-ledger/store/use-ledger-ui-store";
+import {
+  formatDecimalWithCommas,
+  formatUsdtAmount,
+  formatVesAmount,
+  getStatusCategoryBadgeStyle,
+  getTradeTypeBadgeStyle,
+} from "@/lib/format-currency";
+import {
+  getCurrentVetDateIso,
+  getCurrentVetMonthIso,
+} from "@/lib/timezone-utc4";
 import { cn } from "@/lib/utils";
 
 interface LiveOperationsLedgerProps {
-  readonly period: PeriodFilter;
-  readonly selectedBank: string | null;
-  readonly onSelectBank: (bank: string | null) => void;
+  readonly defaultAvgMode?: AveragePriceMode;
+  readonly onBackToTerminal?: () => void;
 }
 
-const BANK_BADGE_STYLES: Record<
-  string,
-  { bg: string; text: string; border: string; dot: string }
-> = {
-  Banesco: {
-    bg: "bg-emerald-50",
-    text: "text-emerald-800",
-    border: "border-emerald-200",
-    dot: "bg-emerald-500",
-  },
-  "Pago Móvil": {
-    bg: "bg-violet-50",
-    text: "text-violet-800",
-    border: "border-violet-200",
-    dot: "bg-violet-500",
-  },
-  Mercantil: {
-    bg: "bg-blue-50",
-    text: "text-blue-800",
-    border: "border-blue-200",
-    dot: "bg-blue-600",
-  },
-  BBVA: {
-    bg: "bg-sky-50",
-    text: "text-sky-800",
-    border: "border-sky-200",
-    dot: "bg-sky-500",
-  },
-  "Banco de Venezuela": {
-    bg: "bg-rose-50",
-    text: "text-rose-800",
-    border: "border-rose-200",
-    dot: "bg-rose-600",
-  },
-  Bancamiga: {
-    bg: "bg-teal-50",
-    text: "text-teal-800",
-    border: "border-teal-200",
-    dot: "bg-teal-600",
-  },
-  BNC: {
-    bg: "bg-amber-50",
-    text: "text-amber-800",
-    border: "border-amber-200",
-    dot: "bg-amber-600",
-  },
-};
-
-function formatVes(val: string | number): string {
-  const num = typeof val === "string" ? parseFloat(val.replace(/,/g, "")) : val;
-  if (isNaN(num)) return String(val);
-  return num.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
+const BANKS = [
+  "Banesco",
+  "Pago Móvil",
+  "Mercantil",
+  "BBVA",
+  "Banco de Venezuela",
+  "Bancamiga",
+  "BNC",
+] as const;
 
 export function LiveOperationsLedger({
-  period,
-  selectedBank,
-  onSelectBank,
+  defaultAvgMode = "WEIGHTED",
+  onBackToTerminal,
 }: LiveOperationsLedgerProps) {
+  const { setClosingExportModalOpen } = useLedgerUiStore();
+  const [period, setPeriod] = React.useState<PeriodFilter>("ALL");
   const [tradeType, setTradeType] = React.useState<TradeTypeFilter>("ALL");
+  const [statusFilter, setStatusFilter] =
+    React.useState<OrderStatusFilter>("ALL");
+  const [bankFilter, setBankFilter] = React.useState<string>("");
   const [dateFilter, setDateFilter] = React.useState<string>("");
-  const [searchQuery, setSearchQuery] = React.useState("");
-  const [expandedOrder, setExpandedOrder] = React.useState<string | null>(null);
+  const [monthFilter, setMonthFilter] = React.useState<string>("");
+  const [searchQuery, setSearchQuery] = React.useState<string>("");
   const [page, setPage] = React.useState<number>(1);
+  const limit = 50;
+
+  React.useEffect(() => {
+    setDateFilter((prev) => prev || getCurrentVetDateIso());
+    setMonthFilter((prev) => prev || getCurrentVetMonthIso());
+  }, []);
+
+  const syncMutation = useSyncBinanceMutation();
 
   const ordersQuery = useP2POrdersQuery({
     period,
     tradeType,
-    bank: selectedBank ?? undefined,
-    date: dateFilter || undefined,
+    status: statusFilter,
+    bank: bankFilter || undefined,
+    date: period === "DAY" ? dateFilter : undefined,
+    month: period === "MONTH" ? monthFilter : undefined,
     page,
+    limit,
   });
 
-  const summaryQuery = useP2PSummaryQuery(period, "FIFO");
-  const syncMutation = useSyncBinanceMutation();
-  const [syncFeedback, setSyncFeedback] = React.useState<string | null>(null);
+  const summaryQuery = useP2PSummaryQuery({
+    period: period === "ALL" ? "MONTH" : period,
+    method: "FIFO",
+    date: period === "DAY" ? dateFilter : undefined,
+    month: period === "MONTH" ? monthFilter : undefined,
+    avgMode: defaultAvgMode,
+  });
 
-  const handleManualSync = () => {
-    setSyncFeedback(null);
-    syncMutation.mutate(undefined, {
-      onSuccess: (res) => {
-        setSyncFeedback(res.message);
-        setTimeout(() => setSyncFeedback(null), 4000);
-      },
-      onError: (err) => {
-        setSyncFeedback(`Error: ${err.message}`);
-        setTimeout(() => setSyncFeedback(null), 5000);
-      },
-    });
-  };
+  const ordersData = ordersQuery.data;
+  const totalCount = ordersData?.totalCount ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / limit));
 
-  const data = ordersQuery.data;
-  const allRows = data?.items ?? [];
-
-  const filteredRows = React.useMemo(() => {
-    if (!searchQuery.trim()) return allRows;
-    const q = searchQuery.toLowerCase().trim();
-    return allRows.filter(
-      (r) =>
-        r.orderNumber.toLowerCase().includes(q) ||
-        r.counterPartNickName.toLowerCase().includes(q) ||
-        r.payMethodName.toLowerCase().includes(q)
+  const visibleItems = React.useMemo(() => {
+    const items = ordersData?.items ?? [];
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(
+      (o) =>
+        o.orderNumber.toLowerCase().includes(q) ||
+        o.advNo.toLowerCase().includes(q) ||
+        o.counterPartNickName.toLowerCase().includes(q) ||
+        o.payMethodName.toLowerCase().includes(q)
     );
-  }, [allRows, searchQuery]);
+  }, [ordersData?.items, searchQuery]);
 
-  const toggleExpand = (orderNum: string) => {
-    setExpandedOrder((prev) => (prev === orderNum ? null : orderNum));
+  const handleResetFilters = () => {
+    setPeriod("ALL");
+    setTradeType("ALL");
+    setStatusFilter("ALL");
+    setBankFilter("");
+    setSearchQuery("");
+    setPage(1);
   };
 
   return (
-    <section
-      aria-label="Tus Operaciones de Hoy"
-      className="flex w-full flex-col gap-5 rounded-2xl border border-slate-200/90 bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]"
-    >
-      {/* Cabecera: Título + Buscador + Filtros de Tipo */}
-      <div className="flex flex-col gap-4 border-b border-slate-100 pb-4 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <h2 className="font-display text-xl font-extrabold tracking-tight text-slate-900">
-              Historial de Compras y Ventas
+    <section className="flex flex-col gap-4 rounded-2xl border border-slate-200/90 bg-white p-4 shadow-xs sm:p-5">
+      {/* Cabecera */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+            <h2 className="text-base font-extrabold text-slate-900">
+              Historial Íntegro de Órdenes Binance P2P (Espejo Cronológico)
             </h2>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-bold text-emerald-800">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-              En Vivo (Ciclo 24h)
-            </span>
-            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-0.5 text-xs font-extrabold text-slate-700">
-              {data?.totalCount ?? filteredRows.length} operaciones
-            </span>
-            <button
-              type="button"
-              onClick={handleManualSync}
-              disabled={syncMutation.isPending}
-              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300 bg-emerald-100/70 px-3 py-1 text-xs font-bold text-emerald-800 transition-all hover:bg-emerald-200 disabled:opacity-50 cursor-pointer"
-            >
-              <RefreshCw
-                className={cn(
-                  "h-3 w-3 text-emerald-700",
-                  syncMutation.isPending && "animate-spin"
-                )}
-              />
-              <span>
-                {syncMutation.isPending
-                  ? "Sincronizando..."
-                  : "Sincronizar Ahora"}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                const url = dateFilter
-                  ? `/api/p2p/export-csv?date=${encodeURIComponent(dateFilter)}`
-                  : "/api/p2p/export-csv";
-                window.location.href = url;
-              }}
-              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400 bg-emerald-600 px-3.5 py-1 text-xs font-bold text-white shadow-xs transition-all hover:bg-emerald-500 cursor-pointer"
-            >
-              <Download className="h-3 w-3" />
-              <span>Descargar Excel</span>
-            </button>
-            {syncFeedback && (
-              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
-                {syncFeedback}
-              </span>
-            )}
           </div>
-          <p className="text-xs font-medium text-slate-500">
-            Registro continuo de compras y ventas de las 24 horas con cálculo automático de ganancias e impuestos.
+          <p className="mt-0.5 text-xs text-slate-500">
+            Cero alteración ni reordenamiento interno · Ordenado por `createTime` descendente en hora oficial de Venezuela (`America/Caracas`).
           </p>
         </div>
 
-        {/* Barra de Búsqueda + Selector Todas / Ventas / Compras */}
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Buscador */}
-          <div className="relative flex items-center">
-            <Search className="pointer-events-none absolute left-3 h-3.5 w-3.5 text-slate-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Buscar cliente u orden..."
-              className="w-52 rounded-xl border border-slate-200 bg-slate-50 py-2 pl-8 pr-7 text-xs font-medium text-slate-800 placeholder:text-slate-400 focus:border-emerald-500 focus:bg-white focus:outline-none"
+        <div className="flex flex-wrap items-center gap-2">
+          {onBackToTerminal && (
+            <button
+              type="button"
+              onClick={onBackToTerminal}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              <span>Centro de Comando</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => syncMutation.mutate()}
+            disabled={syncMutation.isPending}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+          >
+            <RefreshCw
+              className={cn(
+                "h-3.5 w-3.5",
+                (syncMutation.isPending || ordersQuery.isFetching) &&
+                  "animate-spin text-emerald-600"
+              )}
             />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery("")}
-                className="absolute right-2.5 text-slate-400 hover:text-slate-600"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-
-          {/* Filtros de Tipo de Operación */}
-          <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-100/80 p-1">
-            {(
-              [
-                {
-                  id: "ALL",
-                  label: `Todas (${data?.totalCount ?? 0})`,
-                  activeClass: "bg-slate-900 text-white shadow-sm",
-                },
-                {
-                  id: "SELL",
-                  label: `Solo Ventas (${data?.sellCount ?? 0})`,
-                  activeClass: "bg-emerald-600 text-white shadow-sm",
-                },
-                {
-                  id: "BUY",
-                  label: `Solo Compras (${data?.buyCount ?? 0})`,
-                  activeClass: "bg-blue-600 text-white shadow-sm",
-                },
-              ] as const satisfies readonly {
-                id: TradeTypeFilter;
-                label: string;
-                activeClass: string;
-              }[]
-            ).map((filter) => {
-              const isActive = tradeType === filter.id;
-              return (
-                <button
-                  key={filter.id}
-                  type="button"
-                  onClick={() => {
-                    setTradeType(filter.id);
-                    setPage(1);
-                  }}
-                  className={cn(
-                    "rounded-lg px-3 py-1.5 text-xs font-bold transition-all",
-                    isActive
-                      ? filter.activeClass
-                      : "text-slate-600 hover:text-slate-900"
-                  )}
-                >
-                  {filter.label}
-                </button>
-              );
-            })}
-          </div>
+            <span>Sincronizar Binance</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setClosingExportModalOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700"
+          >
+            <FileSpreadsheet className="h-3.5 w-3.5" />
+            <span>Cierre Día / Mes (Excel / PDF)</span>
+          </button>
         </div>
       </div>
 
-      {/* Selector y Filtros por Fecha */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3">
-        <div className="flex flex-wrap items-center gap-2.5">
-          <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 shadow-xs">
-            <Calendar className="h-4 w-4 text-emerald-600 shrink-0" />
-            <span className="text-xs font-bold text-slate-700">Ver Fecha:</span>
+      {/* Contadores rápidos del resultado filtrado */}
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-6">
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+          <p className="text-[10px] font-bold uppercase text-slate-500">
+            Órdenes Totales
+          </p>
+          <p className="font-mono text-base font-extrabold text-slate-900">
+            {totalCount}
+          </p>
+        </div>
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2">
+          <p className="text-[10px] font-bold uppercase text-emerald-700">
+            Completadas
+          </p>
+          <p className="font-mono text-base font-extrabold text-emerald-800">
+            {ordersData?.completedCount ?? 0}
+          </p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-100/70 px-3 py-2">
+          <p className="text-[10px] font-bold uppercase text-slate-600">
+            Canceladas
+          </p>
+          <p className="font-mono text-base font-extrabold text-slate-800">
+            {ordersData?.cancelledCount ?? 0}
+          </p>
+        </div>
+        <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2">
+          <p className="text-[10px] font-bold uppercase text-amber-700">
+            Apeladas
+          </p>
+          <p className="font-mono text-base font-extrabold text-amber-800">
+            {ordersData?.appealCount ?? 0}
+          </p>
+        </div>
+        <div className="rounded-xl border border-rose-200 bg-rose-50/60 px-3 py-2">
+          <p className="text-[10px] font-bold uppercase text-rose-700">
+            Ventas (VENTA)
+          </p>
+          <p className="font-mono text-base font-extrabold text-rose-800">
+            {ordersData?.sellCount ?? 0}
+          </p>
+        </div>
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2">
+          <p className="text-[10px] font-bold uppercase text-emerald-700">
+            Compras (COMPRA)
+          </p>
+          <p className="font-mono text-base font-extrabold text-emerald-800">
+            {ordersData?.buyCount ?? 0}
+          </p>
+        </div>
+      </div>
+
+      {/* Barra de Filtros Explícitos */}
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-500">
+            <Filter className="h-3.5 w-3.5" />
+            Período:
+          </span>
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+            {(
+              [
+                { id: "ALL", label: "Todo el Espejo" },
+                { id: "TODAY", label: "Hoy" },
+                { id: "MONTH", label: "Este Mes" },
+                { id: "DAY", label: "Día" },
+              ] as const
+            ).map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  setPeriod(item.id);
+                  setPage(1);
+                }}
+                className={cn(
+                  "rounded-md px-2.5 py-1 text-[11px] font-bold transition-all",
+                  period === item.id
+                    ? "bg-slate-900 text-white"
+                    : "text-slate-600 hover:text-slate-900"
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          {period === "DAY" && (
             <input
               type="date"
               value={dateFilter}
@@ -294,475 +267,259 @@ export function LiveOperationsLedger({
                 setDateFilter(e.target.value);
                 setPage(1);
               }}
-              className="bg-transparent text-xs font-semibold text-slate-800 focus:outline-none cursor-pointer"
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-xs font-bold text-slate-800"
             />
-            {dateFilter && (
+          )}
+
+          {period === "MONTH" && (
+            <input
+              type="month"
+              value={monthFilter}
+              onChange={(e) => {
+                setMonthFilter(e.target.value);
+                setPage(1);
+              }}
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-xs font-bold text-slate-800"
+            />
+          )}
+
+          {/* Tipo */}
+          <select
+            value={tradeType}
+            onChange={(e) => {
+              setTradeType(e.target.value as TradeTypeFilter);
+              setPage(1);
+            }}
+            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700"
+          >
+            <option value="ALL">Tipo: Todas</option>
+            <option value="BUY">Solo COMPRA (Verde)</option>
+            <option value="SELL">Solo VENTA (Rojo)</option>
+          </select>
+
+          {/* Estado */}
+          <select
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value as OrderStatusFilter);
+              setPage(1);
+            }}
+            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700"
+          >
+            <option value="ALL">Estado: Todos</option>
+            <option value="COMPLETED">Completadas</option>
+            <option value="CANCELLED">Canceladas</option>
+            <option value="IN_APPEAL">Apeladas / Disputa</option>
+            <option value="IN_PROGRESS">En curso</option>
+          </select>
+
+          {/* Banco opcional */}
+          <select
+            value={bankFilter}
+            onChange={(e) => {
+              setBankFilter(e.target.value);
+              setPage(1);
+            }}
+            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700"
+          >
+            <option value="">Todos los bancos</option>
+            {BANKS.map((bank) => (
+              <option key={bank} value={bank}>
+                {bank}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Buscar orden, advNo, alias..."
+              className="w-52 rounded-lg border border-slate-200 bg-white py-1 pl-8 pr-7 text-xs text-slate-800 focus:border-emerald-500 focus:outline-none"
+            />
+            {searchQuery && (
               <button
                 type="button"
-                onClick={() => {
-                  setDateFilter("");
-                  setPage(1);
-                }}
-                className="text-slate-400 hover:text-slate-600 transition-colors ml-1"
-                title="Quitar filtro de fecha"
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
             )}
           </div>
-
-          {/* Chips rápidos de fechas disponibles */}
-          <div className="flex flex-wrap items-center gap-1.5">
+          {(period !== "ALL" ||
+            tradeType !== "ALL" ||
+            statusFilter !== "ALL" ||
+            bankFilter !== "" ||
+            searchQuery !== "") && (
             <button
               type="button"
-              onClick={() => {
-                setDateFilter("");
-                setPage(1);
-              }}
-              className={cn(
-                "rounded-lg px-2.5 py-1 text-xs font-bold transition-all",
-                !dateFilter
-                  ? "bg-slate-900 text-white shadow-sm"
-                  : "border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
-              )}
+              onClick={handleResetFilters}
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-600 hover:text-slate-900"
             >
-              Todas las Fechas
+              Limpiar
             </button>
-
-            {data?.availableDates?.map((dateStr) => {
-              const [d, m, y] = dateStr.split("/");
-              const isoDate = `${y}-${m}-${d}`;
-              const isSelected = dateFilter === isoDate || dateFilter === dateStr;
-
-              const nowVet = new Date();
-              const todayStr = nowVet.toLocaleDateString("es-VE", {
-                timeZone: "America/Caracas",
-                day: "2-digit",
-                month: "2-digit",
-                year: "numeric",
-              });
-              const isToday = dateStr === todayStr;
-
-              return (
-                <button
-                  key={dateStr}
-                  type="button"
-                  onClick={() => {
-                    setDateFilter(isSelected ? "" : isoDate);
-                    setPage(1);
-                  }}
-                  className={cn(
-                    "rounded-lg px-2.5 py-1 text-xs font-bold transition-all flex items-center gap-1",
-                    isSelected
-                      ? "bg-emerald-600 text-white shadow-sm"
-                      : "border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
-                  )}
-                >
-                  {isToday ? `🟢 Hoy (${dateStr})` : `📅 ${dateStr}`}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {dateFilter && (
-          <span className="text-xs font-bold text-emerald-800 bg-emerald-100/70 border border-emerald-300 px-2.5 py-1 rounded-lg">
-            Filtrando fecha: {dateFilter.includes("-") ? dateFilter.split("-").reverse().join("/") : dateFilter} ({data?.totalCount ?? filteredRows.length} operaciones)
-          </span>
-        )}
-      </div>
-
-      {/* Píldoras Rápidas de Bancos */}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-bold text-slate-500 mr-1">
-          Filtrar por banco:
-        </span>
-        <button
-          type="button"
-          onClick={() => onSelectBank(null)}
-          className={cn(
-            "rounded-full px-3 py-1 text-xs font-bold transition-all",
-            selectedBank === null
-              ? "bg-slate-900 text-white shadow-sm"
-              : "border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"
           )}
-        >
-          Todos
-        </button>
-        {(
-          [
-            "Banesco",
-            "Pago Móvil",
-            "Mercantil",
-            "BBVA",
-            "Banco de Venezuela",
-            "Bancamiga",
-            "BNC",
-          ] as const
-        ).map((bankName) => {
-            const isActive = selectedBank === bankName;
-            const style = BANK_BADGE_STYLES[bankName];
-            return (
-              <button
-                key={bankName}
-                type="button"
-                onClick={() => onSelectBank(isActive ? null : bankName)}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-bold transition-all",
-                  isActive
-                    ? cn(
-                        style?.bg,
-                        style?.text,
-                        style?.border,
-                        "ring-2 ring-offset-1 ring-slate-800"
-                      )
-                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                )}
-              >
-                <span className={cn("h-2 w-2 rounded-full", style?.dot)} />
-                {bankName}
-              </button>
-            );
-          }
-        )}
+        </div>
       </div>
 
-      {/* Tabla Interactiva y Clara */}
-      <div className="w-full overflow-x-auto">
-        <div className="min-w-[1050px]">
-          {/* Encabezados Simples */}
-          <div className="grid grid-cols-12 items-center rounded-xl border border-slate-200/80 bg-slate-50/90 px-4 py-3 text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
-            <div className="col-span-2">Hora y Orden</div>
-            <div className="col-span-1">Operación</div>
-            <div className="col-span-2">Banco y Cliente</div>
-            <div className="col-span-2">Cantidad USDT</div>
-            <div className="col-span-2">Tasa de Cambio (USDT/VES)</div>
-            <div className="col-span-1">Monto en Bs.</div>
-            <div className="col-span-2 text-right text-emerald-800">
-              Tu Ganancia Libre
-            </div>
-          </div>
+      {/* Resumen de Brecha del período en el pie/cabecera */}
+      {summaryQuery.data && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-200/70 bg-emerald-50/40 px-3.5 py-2 text-xs">
+          <span className="font-semibold text-slate-700">
+            Resumen Motor Vuelta ({summaryQuery.data.periodLabel}):{" "}
+            <strong className="font-mono text-slate-900">
+              Brecha {summaryQuery.data.brechaPointsVes} pts
+            </strong>{" "}
+            ·{" "}
+            <strong className="font-mono text-emerald-700">
+              Neta {formatUsdtAmount(summaryQuery.data.netProfitUsdt)} (
+              {formatVesAmount(summaryQuery.data.netProfitVes)})
+            </strong>
+          </span>
+          <span className="font-mono text-[11px] font-bold text-slate-600">
+            Insignia: {summaryQuery.data.merchantBadgeLabel}
+          </span>
+        </div>
+      )}
 
-          {/* Lista de Operaciones */}
-          <div className="mt-2 flex flex-col gap-2">
-            {filteredRows.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50/50 py-10 text-center">
-                <span className="text-sm font-bold text-slate-700">
-                  Aún no tienes operaciones registradas en este período
-                </span>
-                <span className="max-w-md text-xs font-medium text-slate-500">
-                  Conecta tu API Key de Solo Lectura de Binance en la pestaña
-                  &quot;Conexión y Cierres&quot; para sincronizar tus compras y
-                  ventas automáticamente.
-                </span>
-              </div>
-            ) : null}
-            {filteredRows.map((order) => {
-              const isBuy = order.tradeType === "BUY";
-              const isExpanded = expandedOrder === order.orderNumber;
-              const bankStyle = BANK_BADGE_STYLES[order.payMethodName] ?? {
-                bg: "bg-slate-100",
-                text: "text-slate-800",
-                border: "border-slate-200",
-                dot: "bg-slate-500",
-              };
-
-              return (
-                <div
-                  key={order.orderNumber}
-                  className={cn(
-                    "overflow-hidden rounded-xl border transition-all duration-150",
-                    isExpanded
-                      ? "border-emerald-400 bg-white shadow-md"
-                      : isBuy
-                        ? "border-slate-200/70 bg-slate-50/40 hover:border-blue-300 hover:bg-blue-50/20"
-                        : "border-slate-200/80 bg-white hover:border-emerald-300 hover:bg-emerald-50/20"
-                  )}
+      {/* Tabla Exacta de 8 Columnas (7 Obligatorias + Banco/Contraparte) */}
+      <div className="overflow-x-auto rounded-xl border border-slate-200">
+        <table className="w-full min-w-[960px] border-collapse text-left text-xs">
+          <thead>
+            <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-extrabold uppercase tracking-wide text-slate-500">
+              <th className="px-3.5 py-2.5">N° Orden / N° Anuncio</th>
+              <th className="px-3.5 py-2.5">Fecha y Hora (VET -4:00)</th>
+              <th className="px-3.5 py-2.5">Tipo</th>
+              <th className="px-3.5 py-2.5">Estado</th>
+              <th className="px-3.5 py-2.5">Banco / Contraparte</th>
+              <th className="px-3.5 py-2.5 text-right">Precio / Tasa (Bs)</th>
+              <th className="px-3.5 py-2.5 text-right">Cantidad (USDT)</th>
+              <th className="px-3.5 py-2.5 text-right">Monto Total (Bs)</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {ordersQuery.isLoading ? (
+              Array.from({ length: 8 }).map((_, idx) => (
+                <tr key={idx}>
+                  <td colSpan={8} className="px-3.5 py-3">
+                    <div className="h-5 animate-pulse rounded bg-slate-100" />
+                  </td>
+                </tr>
+              ))
+            ) : visibleItems.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={8}
+                  className="px-4 py-10 text-center text-xs font-semibold text-slate-500"
                 >
-                  {/* Fila Principal Clickable */}
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => toggleExpand(order.orderNumber)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        toggleExpand(order.orderNumber);
-                      }
-                    }}
-                    className="grid cursor-pointer grid-cols-12 items-center px-4 py-3.5"
+                  No hay órdenes registradas en este filtro.
+                </td>
+              </tr>
+            ) : (
+              visibleItems.map((order) => {
+                const typeStyle = getTradeTypeBadgeStyle(order.tradeType);
+                const statusStyle = getStatusCategoryBadgeStyle(
+                  order.statusCategory
+                );
+                return (
+                  <tr
+                    key={order.orderNumber}
+                    className="transition-colors hover:bg-slate-50/80"
                   >
-                    {/* 1. Fecha, Hora y Orden */}
-                    <div className="col-span-2 flex flex-col gap-1">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="rounded-md border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[11px] font-extrabold text-slate-800">
-                          {order.timeVetLabel.includes("•")
-                            ? order.timeVetLabel.split("•")[0]?.trim()
-                            : order.timeVetLabel}
-                        </span>
-                        {order.timeVetLabel.includes("•") && (
-                          <span className="text-[11px] font-semibold text-slate-500">
-                            {order.timeVetLabel.split("•")[1]?.trim()}
-                          </span>
-                        )}
-                      </div>
-                      <span className="font-mono text-[11px] font-medium text-slate-400">
-                        Orden #{order.orderNumber}
-                      </span>
-                    </div>
-
-                    {/* 2. Operación: Venta vs Compra */}
-                    <div className="col-span-1">
-                      {isBuy ? (
-                        <span className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-extrabold text-blue-700">
-                          <ArrowDownLeft className="h-3.5 w-3.5" />
-                          Compra
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-extrabold text-emerald-700">
-                          <ArrowUpRight className="h-3.5 w-3.5" />
-                          Venta
-                        </span>
-                      )}
-                    </div>
-
-                    {/* 3. Banco y Cliente */}
-                    <div className="col-span-2 flex flex-col items-start gap-1">
+                    <td className="px-3.5 py-2.5 font-mono">
+                      <p className="font-bold text-slate-900">
+                        {order.orderNumber}
+                      </p>
+                      <p className="text-[10px] text-slate-500">
+                        Adv: {order.advNo}
+                      </p>
+                    </td>
+                    <td className="px-3.5 py-2.5 font-mono text-slate-700">
+                      {order.timeVetLabel}
+                    </td>
+                    <td className="px-3.5 py-2.5">
                       <span
                         className={cn(
-                          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-bold",
-                          bankStyle.bg,
-                          bankStyle.text,
-                          bankStyle.border
+                          "inline-flex rounded-md border px-2 py-0.5 text-[10px] font-extrabold",
+                          typeStyle.badgeClass
                         )}
+                      >
+                        {typeStyle.label}
+                      </span>
+                    </td>
+                    <td className="px-3.5 py-2.5">
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-bold",
+                          statusStyle.badgeClass
+                        )}
+                        title={`Binance raw status: ${order.orderStatus}`}
                       >
                         <span
                           className={cn(
-                            "h-2 w-2 rounded-full",
-                            bankStyle.dot
+                            "h-1.5 w-1.5 rounded-full",
+                            statusStyle.dotClass
                           )}
                         />
+                        {order.statusLabel}
+                      </span>
+                    </td>
+                    <td className="px-3.5 py-2.5">
+                      <p className="font-semibold text-slate-800">
                         {order.payMethodName}
-                      </span>
-                      <span className="text-[11px] font-medium text-slate-500 pl-1">
-                        Cliente: {order.counterPartNickName}
-                      </span>
-                    </div>
-
-                    {/* 4. Cantidad USDT */}
-                    <div className="col-span-2 flex flex-col gap-0.5">
-                      <span className="text-sm font-extrabold text-slate-900">
-                        {order.amountUsdt} USDT
-                      </span>
-                      <span className="text-[11px] font-medium text-slate-500">
-                        {isBuy
-                          ? `Recibiste: ${order.netBuyUsdt} USDT`
-                          : `Comisión: -${order.commissionUsdt} USDT`}
-                      </span>
-                    </div>
-
-                    {/* 5. Tasa de Cambio */}
-                    <div className="col-span-2 flex flex-col gap-0.5">
-                      <span className="text-sm font-extrabold text-slate-900">
-                        {formatVes(order.unitPriceVes)} Bs.
-                      </span>
-                      <span className="text-[11px] font-medium text-slate-500">
-                        {isBuy
-                          ? "Tasa de compra inventario"
-                          : `Comprado a ${formatVes(order.costBasisRateVes)} Bs.`}
-                      </span>
-                    </div>
-
-                    {/* 6. Monto en Bs */}
-                    <div className="col-span-1 flex flex-col gap-0.5">
-                      <span
-                        className={cn(
-                          "text-xs font-extrabold",
-                          isBuy ? "text-slate-600" : "text-slate-900"
-                        )}
-                      >
-                        {isBuy
-                          ? `-${formatVes(order.totalPriceVes)} Bs.`
-                          : `+${formatVes(order.totalPriceVes)} Bs.`}
-                      </span>
-                      <span className="text-[10px] font-semibold text-amber-700">
-                        {isBuy
-                          ? "Recarga"
-                          : `SENIAT (${order.seniatTaxPercentApplied ?? summaryQuery.data?.seniatTaxRatePercent ?? "16"}%): -${formatVes(order.seniatTax16Ves)} Bs.`}
-                      </span>
-                    </div>
-
-                    {/* 7. Tu Ganancia Libre + Botón Expandir */}
-                    <div className="col-span-2 flex items-center justify-end gap-3">
-                      {isBuy ? (
-                        <div className="flex flex-col items-end">
-                          <span className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-800">
-                            USDT Guardados
-                          </span>
-                          <span className="mt-0.5 text-[10px] font-medium text-slate-500">
-                            Para próximas ventas
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-end">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-base font-extrabold text-emerald-600">
-                              +${order.netFreeProfitUsdt}
-                            </span>
-                            <span className="rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-extrabold text-emerald-800">
-                              +{order.marginPercent}%
-                            </span>
-                          </div>
-                          <span className="text-xs font-bold text-slate-700">
-                            +{formatVes(order.netFreeProfitVes)} Bs. libres
-                          </span>
-                        </div>
-                      )}
-
-                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
-                        {isExpanded ? (
-                          <ChevronUp className="h-4 w-4" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4" />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* PANEL DESPLEGABLE INTERACTIVO: "¿CÓMO SE CALCULÓ ESTA OPERACIÓN?" */}
-                  {isExpanded && (
-                    <div className="border-t border-slate-100 bg-gradient-to-r from-slate-50 via-emerald-50/30 to-slate-50 px-5 py-4">
-                      {isBuy ? (
-                        <div className="flex flex-wrap items-center justify-between gap-4">
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white">
-                              <Wallet className="h-5 w-5" />
-                            </div>
-                            <div>
-                              <h4 className="text-sm font-extrabold text-slate-900">
-                                Compra de Inventario (No paga impuesto)
-                              </h4>
-                              <p className="text-xs text-slate-600">
-                                Invertiste{" "}
-                                <strong>
-                                  {formatVes(order.totalPriceVes)} Bs.
-                                </strong>{" "}
-                                por <strong>{order.payMethodName}</strong> para
-                                recargar{" "}
-                                <strong>{order.netBuyUsdt} USDT</strong> a una
-                                tasa de{" "}
-                                <strong>
-                                  {formatVes(order.unitPriceVes)} Bs.
-                                </strong>
-                              </p>
-                            </div>
-                          </div>
-                          <span className="rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-2 text-xs font-bold text-blue-800">
-                            {order.lotRemainingLabel}
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col gap-3">
-                          <div className="flex items-center gap-2 text-xs font-extrabold text-emerald-900">
-                            <Sparkles className="h-4 w-4 text-emerald-600" />
-                            <span>
-                              Explicación fácil de tu ganancia en esta venta:
-                            </span>
-                          </div>
-
-                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-                            <div className="rounded-xl border border-slate-200 bg-white p-3">
-                              <span className="text-[11px] font-bold text-slate-500">
-                                1. Recibiste en {order.payMethodName}
-                              </span>
-                              <div className="mt-1 text-base font-extrabold text-slate-900">
-                                +{formatVes(order.totalPriceVes)} Bs.
-                              </div>
-                              <span className="text-[11px] text-slate-500">
-                                Vendiste {order.amountUsdt} USDT a{" "}
-                                {formatVes(order.unitPriceVes)} Bs.
-                              </span>
-                            </div>
-
-                            <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-3">
-                              <span className="text-[11px] font-bold text-blue-900">
-                                2. Recuperas tu Capital
-                              </span>
-                              <div className="mt-1 text-base font-extrabold text-blue-950">
-                                {formatVes(order.exemptCapitalVes)} Bs.
-                              </div>
-                              <span className="text-[11px] font-medium text-blue-700">
-                                Los habías comprado a{" "}
-                                {formatVes(order.costBasisRateVes)} Bs. (Sin
-                                IVA)
-                              </span>
-                            </div>
-
-                            <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-                              <span className="text-[11px] font-bold text-amber-900">
-                                3. Apartado SENIAT ({order.seniatTaxPercentApplied ?? summaryQuery.data?.seniatTaxRatePercent ?? "16"}%)
-                              </span>
-                              <div className="mt-1 text-base font-extrabold text-amber-700">
-                                -{formatVes(order.seniatTax16Ves)} Bs.
-                              </div>
-                              <span className="text-[11px] font-medium text-amber-800">
-                                Equivale a -${order.seniatTax16Usdt} USDT
-                              </span>
-                            </div>
-
-                            <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-3">
-                              <span className="text-[11px] font-extrabold text-emerald-900">
-                                4. Ganancia Libre Para Ti
-                              </span>
-                              <div className="mt-1 text-base font-extrabold text-emerald-700">
-                                +${order.netFreeProfitUsdt} USDT
-                              </div>
-                              <span className="text-[11px] font-bold text-emerald-800">
-                                +{formatVes(order.netFreeProfitVes)} Bs. libres
-                                en tu bolsillo
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
+                      </p>
+                      <p className="text-[10px] text-slate-500">
+                        {order.counterPartNickName}
+                      </p>
+                    </td>
+                    <td className="px-3.5 py-2.5 text-right font-mono font-bold text-slate-800">
+                      {formatDecimalWithCommas(order.unitPriceVes)} Bs.
+                    </td>
+                    <td className="px-3.5 py-2.5 text-right font-mono font-extrabold text-slate-900">
+                      {formatUsdtAmount(order.amountUsdt)}
+                    </td>
+                    <td className="px-3.5 py-2.5 text-right font-mono font-extrabold text-slate-900">
+                      {formatVesAmount(order.totalPriceVes)}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
 
-      {/* Pie de Tabla: Resumen Rápido de tu Inventario */}
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200/80 bg-slate-50 px-5 py-3.5">
-        <div className="flex flex-wrap items-center gap-6">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-            <span className="text-xs font-medium text-slate-600">
-              USDT disponibles para vender:
-            </span>
-            <span className="text-sm font-extrabold text-slate-900">
-              {summaryQuery.data?.availableVaultUsdt ?? "0.00"} USDT
-            </span>
-          </div>
-
-          <div className="hidden h-4 w-px bg-slate-300 sm:block" />
-
-          <div className="flex items-center gap-2">
-            <PiggyBank className="h-4 w-4 text-blue-600" />
-            <span className="text-xs font-medium text-slate-600">
-              Precio promedio al que compraste:
-            </span>
-            <span className="text-sm font-extrabold text-slate-900">
-              {summaryQuery.data?.currentWacCostVes ?? "1,021.60"} Bs.
-            </span>
-          </div>
-        </div>
-
-        <span className="text-xs font-semibold text-slate-500">
-          Mostrando {filteredRows.length} operaciones recientes
+      {/* Paginación */}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+        <span>
+          Página <strong>{page}</strong> de <strong>{totalPages}</strong> ·{" "}
+          <strong>{totalCount}</strong> órdenes totales
         </span>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+            <span>Anterior</span>
+          </button>
+          <button
+            type="button"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+          >
+            <span>Siguiente</span>
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     </section>
   );

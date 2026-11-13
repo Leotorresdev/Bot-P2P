@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import { env } from "@/env";
 import { auth } from "@/server/auth/better-auth";
 import {
+  ExportClosingQuerySchema,
   GetBanksQuerySchema,
   GetChartDataQuerySchema,
   GetOrdersQuerySchema,
@@ -16,6 +17,7 @@ import {
   LoginCredentialsSchema,
   RegisterUserSchema,
   SaveBinanceVaultBodySchema,
+  UpdateMerchantBadgeSchema,
   UpdateTaxConfigSchema,
   VerifyPasswordSchema,
   type LoginVaultResponseDto,
@@ -33,6 +35,11 @@ import {
 } from "@/server/security/crypto-vault";
 import { SupabaseVaultRepository } from "@/server/db/supabase-vault.repository";
 import { P2PAccountingService } from "@/server/services/p2p-accounting.service";
+import {
+  buildClosingCsv,
+  buildClosingPdfBytes,
+  buildClosingWorkbookXlsx,
+} from "@/server/services/p2p-export.service";
 import { BinanceP2PLiveService } from "@/server/services/binance-p2p-live.service";
 
 export interface AuthenticatedUserContext {
@@ -391,12 +398,15 @@ export const routes = baseApp
       if (!user) {
         return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
       }
-      const { period, method } = c.req.valid("query");
-      const summary = await P2PAccountingService.getSummary(
-        user.id,
+      const { period, method, date, month, avgMode } = c.req.valid("query");
+      const summary = await P2PAccountingService.getSummary({
+        userId: user.id,
         period,
-        method
-      );
+        method,
+        date,
+        month,
+        avgMode,
+      });
       return c.json({ data: summary }, 200);
     }
   )
@@ -467,12 +477,16 @@ export const routes = baseApp
       if (!user) {
         return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
       }
-      const { tradeType, bank, date, page, limit } = c.req.valid("query");
+      const { period, tradeType, status, bank, date, month, page, limit } =
+        c.req.valid("query");
       const result = await P2PAccountingService.getPaginatedOrders({
         userId: user.id,
+        period,
         tradeType,
+        status,
         bank,
         date,
+        month,
         page,
         limit,
       });
@@ -537,6 +551,47 @@ export const routes = baseApp
       );
     }
   )
+  .get("/p2p/merchant-badge", async (c) => {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
+    }
+    const badgeConfig = await P2PAccountingService.getMerchantBadgeConfig(
+      user.id
+    );
+    return c.json({ data: badgeConfig }, 200);
+  })
+  .post(
+    "/p2p/merchant-badge",
+    zValidator("json", UpdateMerchantBadgeSchema),
+    async (c) => {
+      const user = c.get("user");
+      if (!user) {
+        return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
+      }
+      if (user.role === "AUDITOR_SENIAT") {
+        return c.json(
+          {
+            error:
+              "Acceso denegado: El Modo Contador no puede modificar el nivel de insignia.",
+          },
+          403
+        );
+      }
+      const { badge } = c.req.valid("json");
+      const updated = await P2PAccountingService.updateMerchantBadgeConfig(
+        user.id,
+        badge
+      );
+      return c.json(
+        {
+          message: `Insignia actualizada a ${updated.emoji} ${updated.label} (${updated.feeLabel}).`,
+          data: updated,
+        },
+        200
+      );
+    }
+  )
   .get("/p2p/tax-config", async (c) => {
     const user = c.get("user");
     if (!user) {
@@ -576,80 +631,93 @@ export const routes = baseApp
       );
     }
   )
+  .get(
+    "/p2p/export-closing",
+    zValidator("query", ExportClosingQuerySchema),
+    async (c) => {
+      const user = c.get("user");
+      if (!user) {
+        return c.redirect("/login");
+      }
+
+      const { scope, date, month, format, avgMode } = c.req.valid("query");
+      const report = await P2PAccountingService.buildClosingReport({
+        userId: user.id,
+        scope,
+        date,
+        month,
+        avgMode,
+      });
+
+      const prefix = scope === "MONTH" ? "Cierre_Mensual" : "Cierre_Diario";
+      const safeKey = report.periodKey.replace(/[^A-Za-z0-9_-]/g, "-");
+
+      if (format === "pdf") {
+        const pdfBytes = await buildClosingPdfBytes(report);
+        return new Response(Buffer.from(pdfBytes), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": `attachment; filename="${prefix}_P2P_${safeKey}.pdf"`,
+          },
+        });
+      }
+
+      if (format === "csv") {
+        const csvString = buildClosingCsv(report);
+        return new Response(csvString, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/csv; charset=utf-8",
+            "Content-Disposition": `attachment; filename="${prefix}_P2P_${safeKey}.csv"`,
+          },
+        });
+      }
+
+      const xlsxBytes = await buildClosingWorkbookXlsx(report);
+      return new Response(Buffer.from(xlsxBytes), {
+        status: 200,
+        headers: {
+          "Content-Type":
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "Content-Disposition": `attachment; filename="${prefix}_P2P_${safeKey}.xlsx"`,
+        },
+      });
+    }
+  )
   .get("/p2p/export-csv", async (c) => {
     const user = c.get("user");
     if (!user) {
       return c.redirect("/login");
     }
 
-    const dateParam = c.req.query("date") || undefined;
-    const [ordersResult, taxConfig] = await Promise.all([
-      P2PAccountingService.getPaginatedOrders({
-        userId: user.id,
-        tradeType: "ALL",
-        date: dateParam,
-        page: 1,
-        limit: 5000,
-      }),
-      P2PAccountingService.getUserTaxConfig(user.id),
-    ]);
+    const dateParam = c.req.query("date");
+    const monthParam = c.req.query("month");
+    const scope = monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? "MONTH" : "DAY";
 
-    const items = ordersResult.items;
-    const seniatVesHeader = `Impuesto_SENIAT_${taxConfig.seniatTaxPercent}_VES`;
-    const seniatUsdtHeader = `Impuesto_SENIAT_${taxConfig.seniatTaxPercent}_USDT`;
+    const report = await P2PAccountingService.buildClosingReport({
+      userId: user.id,
+      scope,
+      date:
+        dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)
+          ? dateParam
+          : undefined,
+      month:
+        monthParam && /^\d{4}-\d{2}$/.test(monthParam)
+          ? monthParam
+          : undefined,
+      avgMode: "WEIGHTED",
+    });
 
-    const csvHeader = [
-      "Orden_Binance",
-      "Fecha_Hora_VET",
-      "Tipo",
-      "Rol",
-      "Banco_Nacional",
-      "Contraparte",
-      "Monto_USDT",
-      "Comision_Binance_USDT",
-      "Tasa_Operacion_VES",
-      "Tasa_Costo_Base_VES",
-      "Total_Banco_VES",
-      "Capital_Rotado_Exento_VES",
-      seniatVesHeader,
-      seniatUsdtHeader,
-      "Ganancia_Neta_Libre_VES",
-      "Ganancia_Neta_Libre_USDT",
-      "Margen_Porcentaje",
-    ].join(",");
-
-    const csvRows = items.map((row) =>
-      [
-        row.orderNumber,
-        `"${row.timeVetLabel}"`,
-        row.tradeType,
-        row.advertisementRole,
-        `"${row.payMethodName}"`,
-        `"${row.counterPartNickName}"`,
-        row.amountUsdt,
-        row.commissionUsdt,
-        row.unitPriceVes,
-        row.costBasisRateVes,
-        row.totalPriceVes,
-        row.exemptCapitalVes,
-        row.seniatTax16Ves,
-        row.seniatTax16Usdt,
-        row.netFreeProfitVes,
-        row.netFreeProfitUsdt,
-        `${row.marginPercent}%`,
-      ].join(",")
-    );
-
-    const csvString = [csvHeader, ...csvRows].join("\n");
-    const filenameDate = (dateParam && dateParam !== "ALL")
-      ? dateParam.replace(/\//g, "-")
-      : new Date().toISOString().slice(0, 10);
+    const csvString = buildClosingCsv(report);
+    const prefix = scope === "MONTH" ? "Cierre_Mensual" : "Cierre_Diario";
+    const safeKey = report.periodKey.replace(/[^A-Za-z0-9_-]/g, "-");
 
     return new Response(csvString, {
       status: 200,
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="Registro_Diario_24H_SENIAT_${taxConfig.seniatTaxPercent}_P2P_${filenameDate}.csv"`,
+        "Content-Disposition": `attachment; filename="${prefix}_P2P_${safeKey}.csv"`,
       },
     });
   });

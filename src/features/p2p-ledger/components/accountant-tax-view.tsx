@@ -24,23 +24,42 @@ import {
   useP2PSummaryQuery,
 } from "@/features/p2p-ledger/api/use-p2p-queries";
 import type { TradeTypeFilter } from "@/features/p2p-ledger/schemas/p2p.schemas";
+import {
+  formatDateIsoVe,
+  getCurrentVetDateIso,
+  getCurrentVetMonthIso,
+} from "@/lib/timezone-utc4";
+import {
+  formatDecimalWithCommas,
+  formatUsdtAmount,
+  formatVesAmount,
+  getStatusCategoryBadgeStyle,
+  getTradeTypeBadgeStyle,
+} from "@/lib/format-currency";
 import { cn } from "@/lib/utils";
 
 export function AccountantTaxView() {
   const closingsQuery = useDailyClosingsQuery();
-  const summaryQuery = useP2PSummaryQuery("TODAY", "FIFO");
+  const summaryQuery = useP2PSummaryQuery({ period: "TODAY", method: "FIFO" });
   const [filterType, setFilterType] = React.useState<TradeTypeFilter>("ALL");
   const [dateFilter, setDateFilter] = React.useState<string>("");
+  const [todayVeLabel, setTodayVeLabel] = React.useState<string>("");
   const [page, setPage] = React.useState<number>(1);
   const [expandedClosingId, setExpandedClosingId] = React.useState<
     string | null
   >(null);
 
+  React.useEffect(() => {
+    setTodayVeLabel(formatDateIsoVe(getCurrentVetDateIso()));
+  }, []);
+
   const ordersQuery = useP2POrdersQuery({
-    period: "TODAY",
+    period: dateFilter ? "DAY" : "ALL",
     tradeType: filterType,
+    status: "ALL",
     date: dateFilter || undefined,
     page,
+    limit: 50,
   });
 
   const closings = closingsQuery.data?.closings ?? [];
@@ -50,8 +69,8 @@ export function AccountantTaxView() {
 
   const handleDownloadExcel = () => {
     const url = dateFilter
-      ? `/api/p2p/export-csv?date=${encodeURIComponent(dateFilter)}`
-      : "/api/p2p/export-csv";
+      ? `/api/p2p/export-closing?scope=DAY&date=${encodeURIComponent(dateFilter)}&format=xlsx`
+      : `/api/p2p/export-closing?scope=MONTH&month=${encodeURIComponent(getCurrentVetMonthIso())}&format=xlsx`;
     window.location.href = url;
   };
 
@@ -407,15 +426,7 @@ export function AccountantTaxView() {
                 const [d, m, y] = dateStr.split("/");
                 const isoDate = `${y}-${m}-${d}`;
                 const isSelected = dateFilter === isoDate || dateFilter === dateStr;
-
-                const nowVet = new Date();
-                const todayStr = nowVet.toLocaleDateString("es-VE", {
-                  timeZone: "America/Caracas",
-                  day: "2-digit",
-                  month: "2-digit",
-                  year: "numeric",
-                });
-                const isToday = dateStr === todayStr;
+                const isToday = todayVeLabel !== "" && dateStr === todayVeLabel;
 
                 return (
                   <button
@@ -449,58 +460,66 @@ export function AccountantTaxView() {
         {/* Tabla Contable Fiscal */}
         <div className="w-full overflow-x-auto">
           <div className="min-w-[1050px]">
-            {/* Encabezados Fiscales */}
+            {/* Encabezados Fiscales y Espejo Binance */}
             <div className="grid grid-cols-12 items-center rounded-xl border border-slate-200/80 bg-slate-50/90 px-4 py-3 text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
-              <div className="col-span-2">N° Comprobante / Hora</div>
+              <div className="col-span-3">Fecha VET / N° Orden y Anuncio</div>
               <div className="col-span-1">Tipo</div>
+              <div className="col-span-2">Estado</div>
               <div className="col-span-2">Banco Nacional</div>
-              <div className="col-span-2">Monto Total Facturado</div>
-              <div className="col-span-2">Capital Exento (Costo)</div>
-              <div className="col-span-1">Base Gravable</div>
-              <div className="col-span-2 text-right text-amber-900">
-                Débito IVA (16%)
-              </div>
+              <div className="col-span-2">Tasa y Cantidad USDT</div>
+              <div className="col-span-2 text-right">Monto Total (Bs.)</div>
             </div>
 
-            {/* Filas Contables */}
+            {/* Filas Contables Exactas */}
             <div className="mt-2 flex flex-col gap-2">
               {orders.map((order) => {
-                const isBuy = order.tradeType === "BUY";
+                const typeStyle = getTradeTypeBadgeStyle(order.tradeType);
+                const statusStyle = getStatusCategoryBadgeStyle(
+                  order.statusCategory
+                );
                 return (
                   <div
                     key={order.orderNumber}
                     className="grid grid-cols-12 items-center rounded-xl border border-slate-200/70 bg-white px-4 py-3 text-xs"
                   >
-                    {/* Comprobante / Hora */}
-                    <div className="col-span-2 flex flex-col gap-1">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-extrabold text-amber-900">
-                          {order.timeVetLabel.includes("•")
-                            ? order.timeVetLabel.split("•")[0]?.trim()
-                            : order.timeVetLabel}
-                        </span>
-                        {order.timeVetLabel.includes("•") && (
-                          <span className="text-[11px] font-semibold text-slate-500">
-                            {order.timeVetLabel.split("•")[1]?.trim()}
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-[11px] font-medium text-slate-400">
-                        Orden #{order.orderNumber}
+                    {/* Comprobante / Hora VET */}
+                    <div className="col-span-3 flex flex-col gap-1">
+                      <span className="w-fit rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-extrabold text-amber-900">
+                        {order.timeVetLabel}
+                      </span>
+                      <span className="font-mono text-[11px] font-medium text-slate-500">
+                        Orden #{order.orderNumber} · Adv {order.advNo}
                       </span>
                     </div>
 
                     {/* Tipo */}
                     <div className="col-span-1">
-                      {isBuy ? (
-                        <span className="rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-extrabold text-blue-700">
-                          Compra
-                        </span>
-                      ) : (
-                        <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-extrabold text-emerald-700">
-                          Venta
-                        </span>
-                      )}
+                      <span
+                        className={cn(
+                          "rounded-md border px-2 py-0.5 text-[11px] font-extrabold",
+                          typeStyle.badgeClass
+                        )}
+                      >
+                        {typeStyle.label}
+                      </span>
+                    </div>
+
+                    {/* Estado */}
+                    <div className="col-span-2">
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-bold",
+                          statusStyle.badgeClass
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "h-1.5 w-1.5 rounded-full",
+                            statusStyle.dotClass
+                          )}
+                        />
+                        {order.statusLabel}
+                      </span>
                     </div>
 
                     {/* Banco */}
@@ -509,55 +528,24 @@ export function AccountantTaxView() {
                       <span>{order.payMethodName}</span>
                     </div>
 
-                    {/* Monto Total Facturado */}
-                    <div className="col-span-2 flex flex-col gap-0.5">
+                    {/* Tasa / Cantidad */}
+                    <div className="col-span-2 flex flex-col gap-0.5 font-mono">
                       <span className="font-extrabold text-slate-900">
-                        {order.totalPriceVes} Bs.
+                        {formatUsdtAmount(order.amountUsdt)}
                       </span>
                       <span className="text-[11px] text-slate-500">
-                        ({order.amountUsdt} USDT @ {order.unitPriceVes} Bs)
+                        @ {formatDecimalWithCommas(order.unitPriceVes)} Bs/USDT
                       </span>
                     </div>
 
-                    {/* Capital Exento */}
-                    <div className="col-span-2 flex flex-col gap-0.5">
-                      <span className="font-bold text-blue-900">
-                        {isBuy
-                          ? `${order.totalPriceVes} Bs. (100% Inversión)`
-                          : `${order.exemptCapitalVes} Bs. (Exento)`}
+                    {/* Monto Total Facturado */}
+                    <div className="col-span-2 flex flex-col items-end gap-0.5 font-mono">
+                      <span className="text-sm font-extrabold text-slate-900">
+                        {formatVesAmount(order.totalPriceVes)}
                       </span>
-                      <span className="text-[10px] text-blue-700">
-                        {isBuy
-                          ? "Costo de compra"
-                          : `Base: ${order.costBasisRateVes} Bs/USDT`}
+                      <span className="text-[10px] font-semibold text-slate-500">
+                        {order.counterPartNickName}
                       </span>
-                    </div>
-
-                    {/* Base Gravable */}
-                    <div className="col-span-1 font-extrabold text-slate-900">
-                      {isBuy ? (
-                        <span className="text-slate-400">0.00 Bs.</span>
-                      ) : (
-                        <span>+{order.netFreeProfitVes} Bs.</span>
-                      )}
-                    </div>
-
-                    {/* Débito IVA 16% */}
-                    <div className="col-span-2 flex flex-col items-end gap-0.5">
-                      {isBuy ? (
-                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">
-                          Exento de IVA
-                        </span>
-                      ) : (
-                        <>
-                          <span className="font-extrabold text-amber-700">
-                            -{order.seniatTax16Ves} Bs.
-                          </span>
-                          <span className="text-[10px] font-semibold text-amber-800">
-                            -${order.seniatTax16Usdt} (16% IVA SENIAT)
-                          </span>
-                        </>
-                      )}
                     </div>
                   </div>
                 );

@@ -33,6 +33,7 @@ export function TopNavigationBar() {
     activeRole,
     setActiveRole,
     setUnlockAccountantModalOpen,
+    setClosingExportModalOpen,
   } = useLedgerUiStore();
   const queryClient = useQueryClient();
   const [isSyncing, setIsSyncing] = React.useState(false);
@@ -40,7 +41,7 @@ export function TopNavigationBar() {
   const [isLoggingOut, setIsLoggingOut] = React.useState(false);
 
   const handleDownloadCsv = () => {
-    window.location.href = "/api/p2p/export-csv";
+    setClosingExportModalOpen(true);
   };
 
   const handleLogout = async () => {
@@ -246,7 +247,7 @@ export function TopNavigationBar() {
         >
           <Download className="h-3.5 w-3.5 text-white" />
           <span>
-            {isAccountant ? "Exportar Libro SENIAT (.XLSX)" : "Descargar Excel"}
+            {isAccountant ? "Exportar Cierre (.XLSX/.PDF)" : "Cierres (.XLSX/.PDF)"}
           </span>
         </button>
 

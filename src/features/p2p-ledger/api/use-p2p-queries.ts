@@ -3,51 +3,83 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/hono-client";
 import type {
+  AveragePriceMode,
   ChartTimeframe,
   LoginCredentialsInput,
   LotMethod,
+  MerchantBadgeType,
+  OrderStatusFilter,
   PeriodFilter,
   SaveBinanceVaultInput,
   TradeTypeFilter,
   UpdateTaxConfigInput,
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
 
-// Query Key Factory estricta (Single Source of Truth para invalidación quirúrgica)
 export const p2pQueryKeys = {
   all: ["p2p-ledger"] as const,
-  summary: (period: PeriodFilter, method: LotMethod) =>
-    [...p2pQueryKeys.all, "summary", { period, method }] as const,
-  banks: (buyAmount?: number, sellAmount?: number) =>
-    [...p2pQueryKeys.all, "banks", { buyAmount, sellAmount }] as const,
+  summary: (params: {
+    readonly period: PeriodFilter;
+    readonly method: LotMethod;
+    readonly date?: string;
+    readonly month?: string;
+    readonly avgMode: AveragePriceMode;
+  }) => [...p2pQueryKeys.all, "summary", params] as const,
+  banks: (buyAmount: number, sellAmount: number) =>
+    [...p2pQueryKeys.all, "banks", buyAmount, sellAmount] as const,
   chart: (bank: string, timeframe: ChartTimeframe) =>
-    [...p2pQueryKeys.all, "chart", { bank, timeframe }] as const,
+    [...p2pQueryKeys.all, "chart", bank, timeframe] as const,
   orders: (filters: {
-    period: PeriodFilter;
-    tradeType: TradeTypeFilter;
-    bank?: string;
-    date?: string;
-    page: number;
+    readonly period: PeriodFilter;
+    readonly tradeType: TradeTypeFilter;
+    readonly status: OrderStatusFilter;
+    readonly bank?: string;
+    readonly date?: string;
+    readonly month?: string;
+    readonly page: number;
+    readonly limit: number;
   }) => [...p2pQueryKeys.all, "orders", filters] as const,
   closings: () => [...p2pQueryKeys.all, "closings"] as const,
   taxConfig: () => [...p2pQueryKeys.all, "tax-config"] as const,
+  merchantBadge: () => [...p2pQueryKeys.all, "merchant-badge"] as const,
 };
 
-export function useP2PSummaryQuery(period: PeriodFilter, method: LotMethod) {
+export interface P2PSummaryQueryParams {
+  readonly period: PeriodFilter;
+  readonly method?: LotMethod;
+  readonly date?: string;
+  readonly month?: string;
+  readonly avgMode?: AveragePriceMode;
+}
+
+export function useP2PSummaryQuery(params: P2PSummaryQueryParams) {
+  const effectiveMethod: LotMethod = params.method ?? "FIFO";
+  const effectiveAvgMode: AveragePriceMode = params.avgMode ?? "WEIGHTED";
+
   return useQuery({
-    queryKey: p2pQueryKeys.summary(period, method),
+    queryKey: p2pQueryKeys.summary({
+      period: params.period,
+      method: effectiveMethod,
+      date: params.date,
+      month: params.month,
+      avgMode: effectiveAvgMode,
+    }),
     queryFn: async () => {
       const res = await apiClient.api.p2p.summary.$get({
-        query: { period, method },
+        query: {
+          period: params.period,
+          method: effectiveMethod,
+          date: params.date || undefined,
+          month: params.month || undefined,
+          avgMode: effectiveAvgMode,
+        },
       });
       if (!res.ok) {
-        throw new Error("No se pudo cargar el resumen contable P&L.");
+        throw new Error("No se pudo obtener el resumen P2P.");
       }
       const json = await res.json();
       return json.data;
     },
-    refetchInterval: 8_000, // Sincronización en vivo cada 8s
-    refetchIntervalInBackground: true, // Sigue sincronizando en segundo plano / otra pestaña
-    refetchOnWindowFocus: true, // Refresco inmediato al volver a la pestaña
+    refetchInterval: 30_000,
   });
 }
 
@@ -65,18 +97,19 @@ export function useVenezuelanBanksQuery(
         },
       });
       if (!res.ok) {
-        throw new Error("Error consultando el monitor de brechas P2P.");
+        throw new Error("Error consultando el mercado vivo P2P.");
       }
       const json = await res.json();
       return json.data;
     },
-    refetchInterval: 10_000,
-    refetchIntervalInBackground: true,
-    refetchOnWindowFocus: true,
+    refetchInterval: 12_000,
   });
 }
 
-export function useP2PChartDataQuery(bank: string = "Banesco", timeframe: ChartTimeframe = "24H") {
+export function useP2PChartDataQuery(
+  bank: string = "Banesco",
+  timeframe: ChartTimeframe = "24H"
+) {
   return useQuery({
     queryKey: p2pQueryKeys.chart(bank, timeframe),
     queryFn: async () => {
@@ -87,88 +120,146 @@ export function useP2PChartDataQuery(bank: string = "Banesco", timeframe: ChartT
         },
       });
       if (!res.ok) {
-        throw new Error("No se pudo cargar la serie histórica de la gráfica.");
+        throw new Error("Error cargando histórico de velas P2P.");
       }
       const json = await res.json();
       return json.data;
     },
-    refetchInterval: 10_000,
-    refetchIntervalInBackground: true,
-    refetchOnWindowFocus: true,
+    refetchInterval: 60_000,
   });
 }
 
-export function useP2POrdersQuery(params: {
-  period: PeriodFilter;
-  tradeType: TradeTypeFilter;
-  bank?: string;
-  date?: string;
-  page: number;
-}) {
+export interface P2POrdersQueryParams {
+  readonly period?: PeriodFilter;
+  readonly tradeType: TradeTypeFilter;
+  readonly status?: OrderStatusFilter;
+  readonly bank?: string;
+  readonly date?: string;
+  readonly month?: string;
+  readonly page: number;
+  readonly limit?: number;
+}
+
+export function useP2POrdersQuery(params: P2POrdersQueryParams) {
+  const effectivePeriod: PeriodFilter = params.period ?? "ALL";
+  const effectiveStatus: OrderStatusFilter = params.status ?? "ALL";
+  const effectiveLimit = params.limit ?? 50;
+
   return useQuery({
-    queryKey: p2pQueryKeys.orders(params),
+    queryKey: p2pQueryKeys.orders({
+      period: effectivePeriod,
+      tradeType: params.tradeType,
+      status: effectiveStatus,
+      bank: params.bank,
+      date: params.date,
+      month: params.month,
+      page: params.page,
+      limit: effectiveLimit,
+    }),
     queryFn: async () => {
       const res = await apiClient.api.p2p.orders.$get({
         query: {
-          period: params.period,
+          period: effectivePeriod,
           tradeType: params.tradeType,
-          bank: params.bank,
-          date: params.date,
+          status: effectiveStatus,
+          bank: params.bank || undefined,
+          date: params.date || undefined,
+          month: params.month || undefined,
           page: String(params.page),
-          limit: "20",
+          limit: String(effectiveLimit),
         },
       });
       if (!res.ok) {
-        throw new Error("No se pudo cargar el libro diario de órdenes.");
+        throw new Error("No se pudo obtener el historial exacto de órdenes.");
       }
       const json = await res.json();
       return json.data;
     },
-    refetchInterval: 8_000, // Sincronización continua de órdenes cada 8s
-    refetchIntervalInBackground: true, // Mantiene la captura en vivo en segundo plano
-    refetchOnWindowFocus: true, // Captura órdenes de inmediato al reenfocar la ventana
+    refetchInterval: 30_000,
+  });
+}
+
+export function useMerchantBadgeQuery() {
+  return useQuery({
+    queryKey: p2pQueryKeys.merchantBadge(),
+    queryFn: async () => {
+      const res = await apiClient.api.p2p["merchant-badge"].$get();
+      if (!res.ok) {
+        throw new Error("No se pudo obtener el nivel de insignia.");
+      }
+      const json = await res.json();
+      return json.data;
+    },
+  });
+}
+
+export function useUpdateMerchantBadgeMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (badge: MerchantBadgeType) => {
+      const res = await apiClient.api.p2p["merchant-badge"].$post({
+        json: { badge },
+      });
+      const json = await res.json();
+      if (!res.ok || "error" in json) {
+        throw new Error(
+          "error" in json && typeof json.error === "string"
+            ? json.error
+            : "No se pudo actualizar el nivel de insignia."
+        );
+      }
+      return json;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: p2pQueryKeys.merchantBadge(),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: p2pQueryKeys.taxConfig(),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [...p2pQueryKeys.all, "summary"],
+      });
+    },
   });
 }
 
 export function useSyncBinanceMutation() {
   const queryClient = useQueryClient();
+
   return useMutation({
     mutationFn: async () => {
       const res = await apiClient.api.p2p["sync-binance"].$post();
       const json = await res.json();
-      if (!res.ok) {
+      if (!res.ok || "error" in json) {
         throw new Error(
-          (json as { error?: string }).error ??
-            "Error al sincronizar con Binance."
+          "error" in json && typeof json.error === "string"
+            ? json.error
+            : "Error sincronizando órdenes de Binance."
         );
       }
-      return json as { message: string; data: { count: number } };
+      return json;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
+      void queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
     },
   });
 }
 
 export function useTestBinanceMutation() {
-  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => {
       const res = await apiClient.api.p2p["test-binance"].$post();
       const json = await res.json();
-      if (!res.ok) {
+      if (!res.ok || "error" in json) {
         throw new Error(
-          (json as { error?: string }).error ??
-            "Binance rechazó la prueba de conexión."
+          "error" in json && typeof json.error === "string"
+            ? json.error
+            : "Error probando conexión con Binance."
         );
       }
-      return json as {
-        message: string;
-        data: { success: boolean; message: string; orderCount?: number };
-      };
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
+      return json;
     },
   });
 }
@@ -195,15 +286,15 @@ export function useSaveBinanceVaultMutation() {
       const res = await apiClient.api.p2p.vault.$post({
         json: input,
       });
-      if (!res.ok) {
-        const errData = (await res.json().catch(() => null)) as {
-          error?: string;
-        } | null;
+      const json = await res.json();
+      if (!res.ok || "error" in json) {
         throw new Error(
-          errData?.error ?? "Error al cifrar y guardar las credenciales API."
+          "error" in json && typeof json.error === "string"
+            ? json.error
+            : "No se pudo guardar la llave en la bóveda."
         );
       }
-      return res.json();
+      return json;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
@@ -219,15 +310,15 @@ export function useUnlockVaultMutation() {
       const res = await apiClient.api.p2p["login-vault"].$post({
         json: input,
       });
-      if (!res.ok) {
-        const errData = (await res.json().catch(() => null)) as {
-          error?: string;
-        } | null;
+      const json = await res.json();
+      if (!res.ok || "error" in json) {
         throw new Error(
-          errData?.error ?? "Error verificando credenciales y llave 2FA."
+          "error" in json && typeof json.error === "string"
+            ? json.error
+            : "Error iniciando sesión en la bóveda."
         );
       }
-      return res.json();
+      return json;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
@@ -241,7 +332,7 @@ export function useTaxConfigQuery() {
     queryFn: async () => {
       const res = await apiClient.api.p2p["tax-config"].$get();
       if (!res.ok) {
-        throw new Error("No se pudo cargar la configuración de impuestos.");
+        throw new Error("No se pudo obtener la configuración fiscal.");
       }
       const json = await res.json();
       return json.data;
@@ -258,20 +349,17 @@ export function useUpdateTaxConfigMutation() {
         json: input,
       });
       const json = await res.json();
-      if (!res.ok) {
+      if (!res.ok || "error" in json) {
         throw new Error(
-          (json as { error?: string }).error ??
-            "Error al actualizar la configuración tributaria."
+          "error" in json && typeof json.error === "string"
+            ? json.error
+            : "No se pudo actualizar la configuración fiscal."
         );
       }
-      return json as {
-        message: string;
-        data: { seniatTaxPercent: number; makerFeePercent: number };
-      };
+      return json;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
     },
   });
 }
-

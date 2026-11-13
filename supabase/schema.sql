@@ -29,21 +29,40 @@ CREATE TABLE IF NOT EXISTS public.api_credentials (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 3. Tabla de Órdenes P2P Conciliadas
+-- 3. Tabla de Órdenes P2P Espejo Binance (Todos los estados y orden cronológico exacto)
 CREATE TABLE IF NOT EXISTS public.p2p_orders (
   order_number TEXT PRIMARY KEY,
+  adv_no TEXT NOT NULL DEFAULT '',
   user_id TEXT NOT NULL REFERENCES public.p2p_users(id) ON DELETE CASCADE,
   time_vet_label TEXT NOT NULL,
   trade_type TEXT NOT NULL CHECK (trade_type IN ('BUY', 'SELL')),
+  order_status TEXT NOT NULL DEFAULT 'COMPLETED',
+  status_category TEXT NOT NULL DEFAULT 'COMPLETED',
   advertisement_role TEXT NOT NULL DEFAULT 'MAKER',
+  asset TEXT NOT NULL DEFAULT 'USDT',
+  fiat TEXT NOT NULL DEFAULT 'VES',
   pay_method_name TEXT NOT NULL,
   counter_part_nick_name TEXT NOT NULL,
   amount_usdt TEXT NOT NULL,
-  commission_usdt TEXT NOT NULL,
+  commission_usdt TEXT NOT NULL DEFAULT '0',
   unit_price_ves TEXT NOT NULL,
-  cost_basis_rate_ves TEXT NOT NULL,
+  total_price_ves TEXT NOT NULL DEFAULT '0',
+  cost_basis_rate_ves TEXT NOT NULL DEFAULT '0',
+  create_time_ms BIGINT NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Migraciones idempotentes por si la tabla p2p_orders ya existía previamente
+ALTER TABLE public.p2p_orders ADD COLUMN IF NOT EXISTS adv_no TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.p2p_orders ADD COLUMN IF NOT EXISTS order_status TEXT NOT NULL DEFAULT 'COMPLETED';
+ALTER TABLE public.p2p_orders ADD COLUMN IF NOT EXISTS status_category TEXT NOT NULL DEFAULT 'COMPLETED';
+ALTER TABLE public.p2p_orders ADD COLUMN IF NOT EXISTS asset TEXT NOT NULL DEFAULT 'USDT';
+ALTER TABLE public.p2p_orders ADD COLUMN IF NOT EXISTS fiat TEXT NOT NULL DEFAULT 'VES';
+ALTER TABLE public.p2p_orders ADD COLUMN IF NOT EXISTS total_price_ves TEXT NOT NULL DEFAULT '0';
+ALTER TABLE public.p2p_orders ADD COLUMN IF NOT EXISTS create_time_ms BIGINT NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_p2p_orders_user_create_time
+  ON public.p2p_orders (user_id, create_time_ms DESC, order_number DESC);
 
 -- 4. Tabla de Actas de Cierre Diario (11:59 PM VET)
 CREATE TABLE IF NOT EXISTS public.daily_closings (
@@ -65,13 +84,18 @@ CREATE TABLE IF NOT EXISTS public.daily_closings (
   UNIQUE (user_id, closing_iso_date)
 );
 
--- 5. Configuración Fiscal Personalizada por Operador
+-- 5. Configuración de Insignia Comerciante y Tasas por Operador
 CREATE TABLE IF NOT EXISTS public.p2p_tax_config (
   user_id TEXT PRIMARY KEY REFERENCES public.p2p_users(id) ON DELETE CASCADE,
   seniat_tax_percent DOUBLE PRECISION NOT NULL DEFAULT 16,
-  maker_fee_percent DOUBLE PRECISION NOT NULL DEFAULT 0.163,
+  maker_fee_percent DOUBLE PRECISION NOT NULL DEFAULT 0.2,
+  merchant_badge TEXT NOT NULL DEFAULT 'BRONZE',
+  badge_fee_percent DOUBLE PRECISION NOT NULL DEFAULT 0.2,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.p2p_tax_config ADD COLUMN IF NOT EXISTS merchant_badge TEXT NOT NULL DEFAULT 'BRONZE';
+ALTER TABLE public.p2p_tax_config ADD COLUMN IF NOT EXISTS badge_fee_percent DOUBLE PRECISION NOT NULL DEFAULT 0.2;
 
 -- 6. Velas Horarias 24/7 (1 Vela por cada Hora exacta - Hora Venezuela UTC-4)
 CREATE TABLE IF NOT EXISTS public.p2p_hourly_candles (
