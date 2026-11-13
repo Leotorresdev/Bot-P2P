@@ -6,6 +6,32 @@ function insertThousandsCommas(intPart: string): string {
 }
 
 /**
+ * Normaliza cadenas numéricas posiblemente formateadas con separadores de miles (",")
+ * antes de instanciar Decimal.js.
+ */
+export function sanitizeDecimalString(
+  rawValue: string | number | undefined | null
+): string {
+  if (typeof rawValue === "number") {
+    return Number.isFinite(rawValue) ? String(rawValue) : "0";
+  }
+  const cleaned = String(rawValue ?? "0")
+    .trim()
+    .replace(/,/g, "");
+  return cleaned === "" ? "0" : cleaned;
+}
+
+export function isDecimalNonNegative(
+  rawValue: string | number | undefined | null
+): boolean {
+  try {
+    return new Decimal(sanitizeDecimalString(rawValue)).gte(0);
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Formatea un string numérico decimal con separadores de miles usando Decimal.js
  * sin recurrir a operaciones aritméticas nativas de punto flotante.
  */
@@ -14,8 +40,10 @@ export function formatDecimalWithCommas(
   decimals: number = 2
 ): string {
   try {
-    const d = new Decimal(rawValue ?? "0");
-    const fixed = d.toDecimalPlaces(decimals, Decimal.ROUND_HALF_UP).toFixed(decimals);
+    const d = new Decimal(sanitizeDecimalString(rawValue));
+    const rounded = d.toDecimalPlaces(decimals, Decimal.ROUND_HALF_UP);
+    const normalized = rounded.isZero() ? new Decimal(0) : rounded;
+    const fixed = normalized.toFixed(decimals);
     const isNeg = fixed.startsWith("-");
     const unsigned = isNeg ? fixed.slice(1) : fixed;
     const parts = unsigned.split(".");

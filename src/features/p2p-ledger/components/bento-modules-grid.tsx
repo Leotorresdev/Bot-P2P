@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Decimal from "decimal.js";
 import {
   Activity,
   ArrowDownUp,
@@ -37,6 +36,7 @@ import {
   formatDecimalWithCommas,
   formatUsdtAmount,
   formatVesAmount,
+  isDecimalNonNegative,
 } from "@/lib/format-currency";
 import { cn } from "@/lib/utils";
 
@@ -80,15 +80,6 @@ const BADGE_STYLES: Record<
       "border-slate-200 bg-white text-slate-700 hover:border-yellow-400 hover:bg-yellow-50/70",
   },
 };
-
-function isDecimalNonNegative(raw: string | undefined): boolean {
-  if (!raw) return true;
-  try {
-    return new Decimal(raw).gte(0);
-  } catch {
-    return true;
-  }
-}
 
 export function BentoModulesGrid({
   period,
@@ -438,7 +429,7 @@ export function BentoModulesGrid({
           <p className="mt-1 text-[10px] text-slate-400">
             Modo:{" "}
             <strong className="text-slate-600">
-              {avgMode === "WEIGHTED" ? "Ponderado real" : "Aritmético simple"}
+              {avgMode === "WEIGHTED" ? "Ponderado (Σ Bs ÷ Σ USDT)" : "Aritmético simple"}
             </strong>{" "}
             {summary &&
               avgMode === "WEIGHTED" &&

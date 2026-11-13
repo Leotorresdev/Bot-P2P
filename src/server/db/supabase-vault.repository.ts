@@ -1,6 +1,7 @@
 import "server-only";
 import fs from "node:fs";
 import path from "node:path";
+import Decimal from "decimal.js";
 import { supabase } from "@/lib/supabase";
 import { UTC_MINUS_4_OFFSET_MS } from "@/lib/timezone-utc4";
 import {
@@ -386,9 +387,11 @@ export class SupabaseVaultRepository {
           const orderStatus = String(
             row.order_status ?? localMatch?.orderStatus ?? "COMPLETED"
           );
-          const statusCategory = (row.status_category ??
-            localMatch?.statusCategory ??
-            normalizeStatusCat(orderStatus)) as OrderStatusCategory;
+          const statusCategory = row.order_status
+            ? normalizeStatusCat(orderStatus)
+            : ((row.status_category ??
+                localMatch?.statusCategory ??
+                normalizeStatusCat(orderStatus)) as OrderStatusCategory);
 
           return {
             orderNumber: ordNum,
@@ -401,16 +404,24 @@ export class SupabaseVaultRepository {
             statusCategory,
             advertisementRole:
               row.advertisement_role === "TAKER" ? "TAKER" : "MAKER",
-            asset: String(row.asset ?? localMatch?.asset ?? "USDT"),
-            fiat: String(row.fiat ?? localMatch?.fiat ?? "VES"),
+            asset: String(row.asset || localMatch?.asset || "USDT"),
+            fiat: String(row.fiat || localMatch?.fiat || "VES"),
             payMethodName: String(row.pay_method_name || "Banesco"),
             counterPartNickName: String(row.counter_part_nick_name),
             amountUsdt: String(row.amount_usdt),
             commissionUsdt: String(row.commission_usdt ?? "0"),
             unitPriceVes: String(row.unit_price_ves),
-            totalPriceVes: String(
-              row.total_price_ves ?? localMatch?.totalPriceVes ?? "0"
-            ),
+            totalPriceVes: (() => {
+              try {
+                const remoteTotal = new Decimal(
+                  String(row.total_price_ves ?? "0").trim().replace(/,/g, "") || "0"
+                );
+                if (remoteTotal.gt(0)) return remoteTotal.toFixed();
+              } catch {
+                // Fallback a localMatch si existe
+              }
+              return localMatch?.totalPriceVes || "0";
+            })(),
             costBasisRateVes: String(row.cost_basis_rate_ves ?? "0"),
           };
         });

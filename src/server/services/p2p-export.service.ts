@@ -3,7 +3,11 @@ import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { MERCHANT_BADGE_META } from "@/features/p2p-ledger/schemas/p2p.schemas";
-import type { ClosingReportData } from "@/server/services/p2p-accounting.service";
+import {
+  formatDecimalMoney,
+  parseSafeDecimal,
+  type ClosingReportData,
+} from "@/server/services/p2p-accounting.service";
 
 interface AutoTableDocExtension {
   lastAutoTable?: {
@@ -215,9 +219,9 @@ export async function buildClosingWorkbookXlsx(
       order.statusLabel,
       order.payMethodName,
       order.counterPartNickName,
-      Number(order.unitPriceVes),
-      Number(order.amountUsdt),
-      Number(order.totalPriceVes),
+      parseSafeDecimal(order.unitPriceVes).toNumber(),
+      parseSafeDecimal(order.amountUsdt).toNumber(),
+      parseSafeDecimal(order.totalPriceVes).toNumber(),
     ];
     row.height = 19;
 
@@ -413,15 +417,14 @@ export async function buildClosingPdfBytes(
       o.statusLabel,
       o.payMethodName,
       o.counterPartNickName,
-      Number(o.unitPriceVes).toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 4,
-      }),
+      parseSafeDecimal(o.unitPriceVes)
+        .toNumber()
+        .toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 4,
+        }),
       o.amountUsdt,
-      Number(o.totalPriceVes).toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }),
+      formatDecimalMoney(parseSafeDecimal(o.totalPriceVes), 2),
     ]),
     didParseCell: (data) => {
       if (data.section === "body" && data.column.index === 4) {

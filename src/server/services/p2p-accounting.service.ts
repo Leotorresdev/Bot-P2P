@@ -92,6 +92,26 @@ export function formatDecimalMoney(
 }
 
 /**
+ * Parsea de forma segura una cadena numérica (incluso si trae separadores de miles ",")
+ * retornando Decimal(0) ante entradas inválidas.
+ */
+export function parseSafeDecimal(
+  raw: string | number | undefined | null
+): Decimal {
+  try {
+    if (typeof raw === "number") {
+      return Number.isFinite(raw) ? new Decimal(raw) : new Decimal(0);
+    }
+    const cleaned = String(raw ?? "0")
+      .trim()
+      .replace(/,/g, "");
+    return new Decimal(cleaned === "" ? "0" : cleaned);
+  } catch {
+    return new Decimal(0);
+  }
+}
+
+/**
  * Conserva la precisión exacta recibida de Binance asegurando al menos `minDecimals` decimales.
  */
 export function formatExactDecimalString(
@@ -99,8 +119,7 @@ export function formatExactDecimalString(
   minDecimals: number = 2
 ): string {
   try {
-    const cleaned = (raw ?? "0").trim() || "0";
-    const dec = new Decimal(cleaned);
+    const dec = parseSafeDecimal(raw);
     const fullStr = dec.toFixed();
     const [intPart = "0", fracPart = ""] = fullStr.split(".");
     const trimmedFrac = fracPart.replace(/0+$/, "");
@@ -183,12 +202,12 @@ function toMirrorOrderDto(rec: StoredP2POrderRecord): P2POrderRowDto {
   const tsInfo = formatVetOrderTimestamp(rec.createTimeMs);
   const statusInfo = mapBinanceOrderStatus(rec.orderStatus);
 
-  const amountDec = new Decimal(rec.amountUsdt || "0");
-  const priceDec = new Decimal(rec.unitPriceVes || "0");
-  const totalStr =
-    rec.totalPriceVes && new Decimal(rec.totalPriceVes).gt(0)
-      ? rec.totalPriceVes
-      : amountDec.mul(priceDec).toFixed(2);
+  const amountDec = parseSafeDecimal(rec.amountUsdt);
+  const priceDec = parseSafeDecimal(rec.unitPriceVes);
+  const parsedTotal = parseSafeDecimal(rec.totalPriceVes);
+  const totalStr = parsedTotal.gt(0)
+    ? parsedTotal.toFixed()
+    : amountDec.mul(priceDec).toFixed(2);
 
   return {
     orderNumber: rec.orderNumber,
@@ -356,10 +375,11 @@ function mapRawItemsToStoredRecords(
   return sorted.map((o) => {
     const tsInfo = formatVetOrderTimestamp(o.createTime);
     const statusInfo = mapBinanceOrderStatus(o.orderStatus);
-    const amountDec = new Decimal(o.amount || "0");
-    const unitPriceDec = new Decimal(o.unitPrice || "0");
-    const totalDec = o.totalPrice
-      ? new Decimal(o.totalPrice)
+    const amountDec = parseSafeDecimal(o.amount);
+    const unitPriceDec = parseSafeDecimal(o.unitPrice);
+    const parsedRawTotal = parseSafeDecimal(o.totalPrice);
+    const totalDec = parsedRawTotal.gt(0)
+      ? parsedRawTotal
       : amountDec.mul(unitPriceDec);
 
     return {
@@ -388,7 +408,7 @@ function mapRawItemsToStoredRecords(
 /**
  * Motor puro de cálculo por "Vuelta" y Brecha de Puntos basado en promedios totales
  * de Venta y Compra y comisión de Insignia (Bronce/Plata/Oro) sobre Volumen Total.
- * Solo las órdenes COMPLETED suman al volumen y a las ganancias.
+ * Solo las órdenes COMPLETED en fiat VES suman al volumen y a las ganancias en Bs.
  */
 export function calculateVueltaSummary(params: {
   readonly orders: readonly P2POrderRowDto[];
@@ -439,10 +459,17 @@ export function calculateVueltaSummary(params: {
       continue;
     }
 
-    // Únicamente órdenes COMPLETED suman al volumen y ganancias
-    const amt = new Decimal(order.amountUsdt || "0");
-    const price = new Decimal(order.unitPriceVes || "0");
-    const total = new Decimal(order.totalPriceVes || "0");
+    // Excluir órdenes COMPLETED en otras monedas fiat (ej. Zinli USD) para no distorsionar promedios en Bs.
+    const normalizedFiat = (order.fiat || "VES").trim().toUpperCase();
+    if (normalizedFiat !== "VES") {
+      continue;
+    }
+
+    // Únicamente órdenes COMPLETED en VES suman al volumen y ganancias
+    const amt = parseSafeDecimal(order.amountUsdt);
+    const price = parseSafeDecimal(order.unitPriceVes);
+    const parsedTotal = parseSafeDecimal(order.totalPriceVes);
+    const total = parsedTotal.gt(0) ? parsedTotal : amt.mul(price);
 
     if (order.tradeType === "SELL") {
       completedSellCount += 1;
@@ -1114,16 +1141,13 @@ export class P2PAccountingService {
     let netUsdt = new Decimal(0);
     let netVes = new Decimal(0);
 
-    const parseNum = (str: string) =>
-      new Decimal(str.replace(/,/g, "") || "0");
-
     for (const c of closings) {
-      grossUsdt = grossUsdt.plus(parseNum(c.grossProfitUsdt));
-      grossVes = grossVes.plus(parseNum(c.grossProfitVes));
-      taxUsdt = taxUsdt.plus(parseNum(c.seniatTax16Usdt));
-      taxVes = taxVes.plus(parseNum(c.seniatTax16Ves));
-      netUsdt = netUsdt.plus(parseNum(c.netFreeProfitUsdt));
-      netVes = netVes.plus(parseNum(c.netFreeProfitVes));
+      grossUsdt = grossUsdt.plus(parseSafeDecimal(c.grossProfitUsdt));
+      grossVes = grossVes.plus(parseSafeDecimal(c.grossProfitVes));
+      taxUsdt = taxUsdt.plus(parseSafeDecimal(c.seniatTax16Usdt));
+      taxVes = taxVes.plus(parseSafeDecimal(c.seniatTax16Ves));
+      netUsdt = netUsdt.plus(parseSafeDecimal(c.netFreeProfitUsdt));
+      netVes = netVes.plus(parseSafeDecimal(c.netFreeProfitVes));
     }
 
     return {
