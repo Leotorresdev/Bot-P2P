@@ -18,7 +18,6 @@ import {
   getCurrentVetDateIso,
   getCurrentVetMonthIso,
 } from "@/lib/timezone-utc4";
-import type { AveragePriceMode } from "@/features/p2p-ledger/schemas/p2p.schemas";
 import { useLedgerUiStore } from "@/features/p2p-ledger/store/use-ledger-ui-store";
 import { cn } from "@/lib/utils";
 
@@ -26,7 +25,6 @@ type ExportScope = "DAY" | "MONTH";
 type ExportFormat = "xlsx" | "pdf" | "csv";
 
 interface ClosingExportPanelProps {
-  readonly defaultAvgMode?: AveragePriceMode;
   readonly defaultDate?: string;
   readonly defaultMonth?: string;
   readonly className?: string;
@@ -42,7 +40,6 @@ function extractFilenameFromHeader(
 }
 
 export function ClosingExportPanel({
-  defaultAvgMode = "WEIGHTED",
   defaultDate,
   defaultMonth,
   className,
@@ -51,8 +48,6 @@ export function ClosingExportPanel({
   const [selectedMonth, setSelectedMonth] = React.useState<string>(
     defaultMonth ?? ""
   );
-  const [avgMode, setAvgMode] =
-    React.useState<AveragePriceMode>(defaultAvgMode);
   const [downloadingKey, setDownloadingKey] = React.useState<string | null>(
     null
   );
@@ -70,10 +65,6 @@ export function ClosingExportPanel({
       prev && /^\d{4}-\d{2}$/.test(prev) ? prev : getCurrentVetMonthIso()
     );
   }, []);
-
-  React.useEffect(() => {
-    setAvgMode(defaultAvgMode);
-  }, [defaultAvgMode]);
 
   const handleDownload = async (scope: ExportScope, format: ExportFormat) => {
     const targetDay =
@@ -93,7 +84,6 @@ export function ClosingExportPanel({
       const searchParams = new URLSearchParams({
         scope,
         format,
-        avgMode,
       });
 
       if (scope === "DAY") {
@@ -159,42 +149,19 @@ export function ClosingExportPanel({
 
   return (
     <div className={cn("space-y-4", className)}>
-      {/* Selector de modo de promedio aplicado al cierre */}
+      {/* Base de cálculo del cierre */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5">
         <div>
           <p className="text-xs font-bold text-slate-800">
-            Base de Cálculo Promedio para el Archivo
+            Cálculo Ponderado Real (Σ Total Bs ÷ Σ Total USDT)
           </p>
           <p className="text-[11px] text-slate-500">
             Incluye Sección 1 (Resumen Vuelta, Brecha, Insignia) + Sección 2 (Historial cronológico Binance).
           </p>
         </div>
-        <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
-          <button
-            type="button"
-            onClick={() => setAvgMode("WEIGHTED")}
-            className={cn(
-              "rounded-md px-2.5 py-1 text-[11px] font-bold transition-all",
-              avgMode === "WEIGHTED"
-                ? "bg-slate-900 text-white shadow-xs"
-                : "text-slate-600 hover:text-slate-900"
-            )}
-          >
-            Ponderado (Bs/USDT)
-          </button>
-          <button
-            type="button"
-            onClick={() => setAvgMode("SIMPLE")}
-            className={cn(
-              "rounded-md px-2.5 py-1 text-[11px] font-bold transition-all",
-              avgMode === "SIMPLE"
-                ? "bg-slate-900 text-white shadow-xs"
-                : "text-slate-600 hover:text-slate-900"
-            )}
-          >
-            Simple Aritmético
-          </button>
-        </div>
+        <span className="rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white shadow-xs">
+          Ponderado (Bs/USDT)
+        </span>
       </div>
 
       {/* Dos módulos: Cierre Diario + Cierre del Mes Completo */}
@@ -396,11 +363,9 @@ export function ClosingExportPanel({
 }
 
 export function ClosingExportModal({
-  defaultAvgMode = "WEIGHTED",
   defaultDate,
   defaultMonth,
 }: {
-  readonly defaultAvgMode?: AveragePriceMode;
   readonly defaultDate?: string;
   readonly defaultMonth?: string;
 }) {
@@ -444,7 +409,6 @@ export function ClosingExportModal({
 
         <div className="p-5">
           <ClosingExportPanel
-            defaultAvgMode={defaultAvgMode}
             defaultDate={defaultDate}
             defaultMonth={defaultMonth}
           />

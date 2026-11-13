@@ -3,7 +3,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/hono-client";
 import type {
-  AveragePriceMode,
   ChartTimeframe,
   LoginCredentialsInput,
   LotMethod,
@@ -22,7 +21,6 @@ export const p2pQueryKeys = {
     readonly method: LotMethod;
     readonly date?: string;
     readonly month?: string;
-    readonly avgMode: AveragePriceMode;
   }) => [...p2pQueryKeys.all, "summary", params] as const,
   banks: (buyAmount: number, sellAmount: number) =>
     [...p2pQueryKeys.all, "banks", buyAmount, sellAmount] as const,
@@ -48,12 +46,10 @@ export interface P2PSummaryQueryParams {
   readonly method?: LotMethod;
   readonly date?: string;
   readonly month?: string;
-  readonly avgMode?: AveragePriceMode;
 }
 
 export function useP2PSummaryQuery(params: P2PSummaryQueryParams) {
   const effectiveMethod: LotMethod = params.method ?? "FIFO";
-  const effectiveAvgMode: AveragePriceMode = params.avgMode ?? "WEIGHTED";
 
   return useQuery({
     queryKey: p2pQueryKeys.summary({
@@ -61,7 +57,6 @@ export function useP2PSummaryQuery(params: P2PSummaryQueryParams) {
       method: effectiveMethod,
       date: params.date,
       month: params.month,
-      avgMode: effectiveAvgMode,
     }),
     queryFn: async () => {
       const res = await apiClient.api.p2p.summary.$get({
@@ -70,7 +65,6 @@ export function useP2PSummaryQuery(params: P2PSummaryQueryParams) {
           method: effectiveMethod,
           date: params.date || undefined,
           month: params.month || undefined,
-          avgMode: effectiveAvgMode,
         },
       });
       if (!res.ok) {

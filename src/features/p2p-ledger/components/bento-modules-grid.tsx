@@ -26,7 +26,6 @@ import { TradingViewP2PChart } from "@/features/p2p-ledger/components/tradingvie
 import { CompactOperationsPanel } from "@/features/p2p-ledger/components/compact-operations-panel";
 import {
   MERCHANT_BADGE_META,
-  type AveragePriceMode,
   type LotMethod,
   type MerchantBadgeType,
   type PeriodFilter,
@@ -44,8 +43,6 @@ interface BentoModulesGridProps {
   readonly period: PeriodFilter;
   readonly onPeriodChange: (period: PeriodFilter) => void;
   readonly method: LotMethod;
-  readonly avgMode: AveragePriceMode;
-  readonly onAvgModeChange: (mode: AveragePriceMode) => void;
   readonly selectedDate: string;
   readonly onSelectedDateChange: (dateIso: string) => void;
   readonly selectedMonth: string;
@@ -81,12 +78,122 @@ const BADGE_STYLES: Record<
   },
 };
 
+interface BankCardTheme {
+  readonly bg: string;
+  readonly activeBg: string;
+  readonly border: string;
+  readonly activeRing: string;
+  readonly dot: string;
+  readonly titleText: string;
+  readonly badgeBg: string;
+  readonly badgeText: string;
+}
+
+const DEFAULT_BANK_THEME: BankCardTheme = {
+  bg: "bg-slate-50/70 hover:bg-slate-50",
+  activeBg: "bg-slate-50",
+  border: "border-slate-200",
+  activeRing: "ring-2 ring-emerald-500 border-emerald-500",
+  dot: "bg-slate-500",
+  titleText: "text-slate-900",
+  badgeBg: "bg-slate-200/80",
+  badgeText: "text-slate-800",
+};
+
+const BANK_COLOR_THEMES: Record<string, BankCardTheme> = {
+  Banesco: {
+    bg: "bg-emerald-50/60 hover:bg-emerald-50",
+    activeBg: "bg-emerald-50",
+    border: "border-emerald-200/80",
+    activeRing: "ring-2 ring-emerald-500 border-emerald-500",
+    dot: "bg-emerald-500",
+    titleText: "text-emerald-900",
+    badgeBg: "bg-emerald-100/90",
+    badgeText: "text-emerald-800",
+  },
+  "Pago Móvil": {
+    bg: "bg-violet-50/60 hover:bg-violet-50",
+    activeBg: "bg-violet-50",
+    border: "border-violet-200/80",
+    activeRing: "ring-2 ring-violet-500 border-violet-500",
+    dot: "bg-violet-500",
+    titleText: "text-violet-900",
+    badgeBg: "bg-violet-100/90",
+    badgeText: "text-violet-800",
+  },
+  Mercantil: {
+    bg: "bg-blue-50/60 hover:bg-blue-50",
+    activeBg: "bg-blue-50",
+    border: "border-blue-200/80",
+    activeRing: "ring-2 ring-blue-500 border-blue-500",
+    dot: "bg-blue-600",
+    titleText: "text-blue-900",
+    badgeBg: "bg-blue-100/90",
+    badgeText: "text-blue-800",
+  },
+  BBVA: {
+    bg: "bg-sky-50/60 hover:bg-sky-50",
+    activeBg: "bg-sky-50",
+    border: "border-sky-200/80",
+    activeRing: "ring-2 ring-sky-500 border-sky-500",
+    dot: "bg-sky-500",
+    titleText: "text-sky-900",
+    badgeBg: "bg-sky-100/90",
+    badgeText: "text-sky-800",
+  },
+  "Banco de Venezuela": {
+    bg: "bg-rose-50/60 hover:bg-rose-50",
+    activeBg: "bg-rose-50",
+    border: "border-rose-200/80",
+    activeRing: "ring-2 ring-rose-500 border-rose-500",
+    dot: "bg-rose-600",
+    titleText: "text-rose-950",
+    badgeBg: "bg-rose-100/90",
+    badgeText: "text-rose-800",
+  },
+  Bancamiga: {
+    bg: "bg-teal-50/60 hover:bg-teal-50",
+    activeBg: "bg-teal-50",
+    border: "border-teal-200/80",
+    activeRing: "ring-2 ring-teal-500 border-teal-500",
+    dot: "bg-teal-500",
+    titleText: "text-teal-950",
+    badgeBg: "bg-teal-100/90",
+    badgeText: "text-teal-800",
+  },
+  BNC: {
+    bg: "bg-amber-50/60 hover:bg-amber-50",
+    activeBg: "bg-amber-50",
+    border: "border-amber-200/80",
+    activeRing: "ring-2 ring-amber-500 border-amber-500",
+    dot: "bg-amber-600",
+    titleText: "text-amber-950",
+    badgeBg: "bg-amber-100/90",
+    badgeText: "text-amber-800",
+  },
+};
+
+function formatSignedBankMetric(
+  rawValue: string | undefined,
+  suffix: string
+): { readonly label: string; readonly isPositive: boolean } {
+  const cleaned = (rawValue ?? "0")
+    .replace(/Bs\.?/gi, "")
+    .replace(/%/g, "")
+    .trim();
+  const formatted = formatDecimalWithCommas(cleaned, 2);
+  const isPositive = !formatted.startsWith("-");
+  const signed = isPositive ? `+${formatted}` : formatted;
+  return {
+    label: `${signed}${suffix}`,
+    isPositive,
+  };
+}
+
 export function BentoModulesGrid({
   period,
   onPeriodChange,
   method,
-  avgMode,
-  onAvgModeChange,
   selectedDate,
   onSelectedDateChange,
   selectedMonth,
@@ -107,7 +214,6 @@ export function BentoModulesGrid({
     method,
     date: period === "DAY" ? selectedDate : undefined,
     month: period === "MONTH" ? selectedMonth : undefined,
-    avgMode,
   });
 
   const badgeQuery = useMerchantBadgeQuery();
@@ -239,37 +345,6 @@ export function BentoModulesGrid({
               title="Seleccionar mes calendario (VET)"
             />
           )}
-
-          {/* Selector Ponderado vs Simple */}
-          <div
-            className="inline-flex items-center rounded-xl border border-slate-200 bg-slate-50 p-0.5"
-            title="Por defecto Ponderado (Total Bs / Total USDT) para cierre exacto en Bolívares"
-          >
-            <button
-              type="button"
-              onClick={() => onAvgModeChange("WEIGHTED")}
-              className={cn(
-                "rounded-lg px-2 py-1 text-[11px] font-bold transition-all",
-                avgMode === "WEIGHTED"
-                  ? "bg-emerald-600 text-white shadow-xs"
-                  : "text-slate-600 hover:text-slate-900"
-              )}
-            >
-              Ponderado
-            </button>
-            <button
-              type="button"
-              onClick={() => onAvgModeChange("SIMPLE")}
-              className={cn(
-                "rounded-lg px-2 py-1 text-[11px] font-bold transition-all",
-                avgMode === "SIMPLE"
-                  ? "bg-emerald-600 text-white shadow-xs"
-                  : "text-slate-600 hover:text-slate-900"
-              )}
-            >
-              Simple
-            </button>
-          </div>
 
           {/* Botón Descargar Cierre del Día o Mes */}
           <button
@@ -427,13 +502,10 @@ export function BentoModulesGrid({
             </div>
           </div>
           <p className="mt-1 text-[10px] text-slate-400">
-            Modo:{" "}
+            Cálculo:{" "}
             <strong className="text-slate-600">
-              {avgMode === "WEIGHTED" ? "Ponderado (Σ Bs ÷ Σ USDT)" : "Aritmético simple"}
-            </strong>{" "}
-            {summary &&
-              avgMode === "WEIGHTED" &&
-              `(Simple: ${formatDecimalWithCommas(summary.avgSellRateSimpleVes)} / ${formatDecimalWithCommas(summary.avgBuyRateSimpleVes)})`}
+              Ponderado (Σ Bs ÷ Σ USDT)
+            </strong>
           </p>
         </div>
 
@@ -572,14 +644,14 @@ export function BentoModulesGrid({
 
           {/* Monitor de Brechas en Vivo (7 Bancos Venezuela) */}
           <div className="rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs">
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-3">
               <div className="flex items-center gap-2">
                 <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700">
                   <Building2 className="h-4 w-4" />
                 </div>
                 <div>
                   <h3 className="text-xs font-extrabold text-slate-900">
-                    Brechas en Vivo por Banco (2do Anuncio Merchant Verificado)
+                    Brechas en Vivo por Banco (1er Anuncio Merchant Verificado)
                   </h3>
                   <p className="text-[10px] text-slate-500">
                     Haz clic en un banco para ver su gráfica horaria 24/7 (-4:00 UTC)
@@ -636,61 +708,154 @@ export function BentoModulesGrid({
             </div>
 
             {banksQuery.isLoading ? (
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {Array.from({ length: 4 }).map((_, idx) => (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3">
+                {Array.from({ length: 6 }).map((_, idx) => (
                   <div
                     key={idx}
-                    className="h-16 animate-pulse rounded-xl bg-slate-100"
+                    className="h-44 animate-pulse rounded-xl bg-slate-100"
                   />
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3">
                 {banks.map((bank) => {
                   const isActiveBank = effectiveSelectedBank === bank.bankName;
+                  const theme =
+                    BANK_COLOR_THEMES[bank.bankName] ?? DEFAULT_BANK_THEME;
+                  const brechaFormatted = formatSignedBankMetric(
+                    bank.brechaPointsVes,
+                    " Bs"
+                  );
+                  const spreadFormatted = formatSignedBankMetric(
+                    bank.spreadPercent,
+                    "%"
+                  );
+
                   return (
                     <button
                       key={bank.bankName}
                       type="button"
                       onClick={() => onSelectBank(bank.bankName)}
                       className={cn(
-                        "flex flex-col rounded-xl border p-2 text-left transition-all",
+                        "group flex flex-col justify-between gap-2.5 rounded-xl border p-3.5 text-left transition-all duration-150 active:scale-[0.98]",
+                        theme.border,
                         isActiveBank
-                          ? "border-emerald-500 bg-emerald-50/70 ring-1 ring-emerald-400/50"
-                          : "border-slate-200 bg-slate-50/50 hover:border-slate-300 hover:bg-white"
+                          ? cn(theme.activeBg, theme.activeRing, "shadow-md")
+                          : theme.bg
                       )}
                     >
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="truncate text-[10px] font-extrabold text-slate-800">
-                          {bank.bankName}
-                        </span>
+                      {/* Fila 1: Nombre completo del banco y estado API */}
+                      <div className="flex w-full items-center justify-between gap-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={cn(
+                              "h-2.5 w-2.5 shrink-0 rounded-full",
+                              theme.dot
+                            )}
+                          />
+                          <span
+                            className={cn(
+                              "text-xs font-extrabold leading-tight",
+                              theme.titleText
+                            )}
+                          >
+                            {bank.bankName}
+                          </span>
+                        </div>
                         <span
                           className={cn(
-                            "h-1.5 w-1.5 shrink-0 rounded-full",
-                            bank.isLiveApi ? "bg-emerald-500" : "bg-amber-400"
+                            "inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-bold",
+                            theme.badgeBg,
+                            theme.badgeText
                           )}
-                        />
-                      </div>
-                      <div className="mt-1 space-y-0.5 font-mono text-[10px]">
-                        <div className="flex items-center justify-between text-rose-700">
-                          <span>V:</span>
-                          <span className="font-bold">
-                            {formatDecimalWithCommas(bank.sellRate2nd)}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between text-emerald-700">
-                          <span>C:</span>
-                          <span className="font-bold">
-                            {formatDecimalWithCommas(bank.buyRate2nd)}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="mt-1 flex items-center justify-between border-t border-slate-200/70 pt-1 font-mono text-[9px] font-bold">
-                        <span className="text-slate-500">
-                          +{bank.brechaPointsVes}
+                        >
+                          <span
+                            className={cn(
+                              "h-1.5 w-1.5 rounded-full",
+                              bank.isLiveApi ? "bg-emerald-500" : "bg-amber-400"
+                            )}
+                          />
+                          <span>{bank.isLiveApi ? "Vivo" : "Base"}</span>
                         </span>
-                        <span className="text-emerald-700">
-                          {bank.spreadPercent}%
+                      </div>
+
+                      {/* Fila 2: Puntos de brecha en grande y spread % */}
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          Puntos de Brecha
+                        </span>
+                        <div className="flex flex-wrap items-baseline gap-2">
+                          <span
+                            className={cn(
+                              "font-display text-xl font-extrabold tracking-tight",
+                              brechaFormatted.isPositive
+                                ? "text-slate-900"
+                                : "text-rose-700"
+                            )}
+                          >
+                            {brechaFormatted.label}
+                          </span>
+                          <span
+                            className={cn(
+                              "rounded-md border px-1.5 py-0.5 font-mono text-[11px] font-extrabold",
+                              spreadFormatted.isPositive
+                                ? "border-emerald-300 bg-emerald-100 text-emerald-800"
+                                : "border-rose-300 bg-rose-100 text-rose-800"
+                            )}
+                          >
+                            {spreadFormatted.label}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Fila 3: Detalle de los 1eros Anuncios Venta y Compra */}
+                      <div className="flex flex-col gap-1.5 rounded-lg border border-black/5 bg-white/80 p-2.5 text-[11px]">
+                        <div className="flex flex-col gap-0.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="flex items-center gap-1 font-extrabold text-rose-700">
+                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" />
+                              <span>Venta (1ro):</span>
+                            </span>
+                            <span className="font-mono font-extrabold text-slate-900">
+                              {formatDecimalWithCommas(bank.sellRate2nd)} Bs.
+                            </span>
+                          </div>
+                          {bank.merchantSellNick && (
+                            <span className="truncate pl-2.5 text-[10px] text-slate-500">
+                              por {bank.merchantSellNick}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-col gap-0.5 border-t border-black/5 pt-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="flex items-center gap-1 font-extrabold text-emerald-700">
+                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+                              <span>Compra (1ro):</span>
+                            </span>
+                            <span className="font-mono font-extrabold text-slate-900">
+                              {formatDecimalWithCommas(bank.buyRate2nd)} Bs.
+                            </span>
+                          </div>
+                          {bank.merchantBuyNick && (
+                            <span className="truncate pl-2.5 text-[10px] text-slate-500">
+                              por {bank.merchantBuyNick}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Fila 4: Footer con filtros activos y acción de gráfica */}
+                      <div className="flex items-center justify-between gap-2 border-t border-black/5 pt-1.5 text-[10px] font-semibold text-slate-500">
+                        <span
+                          className="truncate font-mono"
+                          title={`Compra: ${formatDecimalWithCommas(bank.buyFilterAmountVes, 0)} Bs. | Venta: ${formatDecimalWithCommas(bank.sellFilterAmountVes, 0)} Bs.`}
+                        >
+                          C: {formatDecimalWithCommas(bank.buyFilterAmountVes, 0)} · V:{" "}
+                          {formatDecimalWithCommas(bank.sellFilterAmountVes, 0)} Bs
+                        </span>
+                        <span className="shrink-0 font-bold text-slate-700 group-hover:text-slate-950">
+                          {isActiveBank ? "Gráfica activa ✓" : "Ver gráfica →"}
                         </span>
                       </div>
                     </button>

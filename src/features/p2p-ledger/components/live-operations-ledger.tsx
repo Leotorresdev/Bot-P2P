@@ -17,7 +17,6 @@ import {
   useSyncBinanceMutation,
 } from "@/features/p2p-ledger/api/use-p2p-queries";
 import type {
-  AveragePriceMode,
   OrderStatusFilter,
   PeriodFilter,
   TradeTypeFilter,
@@ -37,7 +36,6 @@ import {
 import { cn } from "@/lib/utils";
 
 interface LiveOperationsLedgerProps {
-  readonly defaultAvgMode?: AveragePriceMode;
   readonly onBackToTerminal?: () => void;
 }
 
@@ -52,7 +50,6 @@ const BANKS = [
 ] as const;
 
 export function LiveOperationsLedger({
-  defaultAvgMode = "WEIGHTED",
   onBackToTerminal,
 }: LiveOperationsLedgerProps) {
   const { setClosingExportModalOpen } = useLedgerUiStore();
@@ -90,7 +87,6 @@ export function LiveOperationsLedger({
     method: "FIFO",
     date: period === "DAY" ? dateFilter : undefined,
     month: period === "MONTH" ? monthFilter : undefined,
-    avgMode: defaultAvgMode,
   });
 
   const ordersData = ordersQuery.data;

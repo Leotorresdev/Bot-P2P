@@ -12,11 +12,6 @@ export type PeriodFilter = z.infer<typeof PeriodFilterSchema>;
 export const LotMethodSchema = z.enum(["FIFO", "WAC"]).default("FIFO");
 export type LotMethod = z.infer<typeof LotMethodSchema>;
 
-export const AveragePriceModeSchema = z
-  .enum(["WEIGHTED", "SIMPLE"])
-  .default("WEIGHTED");
-export type AveragePriceMode = z.infer<typeof AveragePriceModeSchema>;
-
 export const MerchantBadgeSchema = z.enum(["BRONZE", "SILVER", "GOLD"]);
 export type MerchantBadgeType = z.infer<typeof MerchantBadgeSchema>;
 
@@ -98,7 +93,6 @@ export const GetSummaryQuerySchema = z.object({
   method: LotMethodSchema.optional().default("FIFO"),
   date: z.string().trim().max(25).optional(),
   month: z.string().trim().max(10).optional(),
-  avgMode: AveragePriceModeSchema,
 });
 
 export const GetBanksQuerySchema = z.object({
@@ -132,7 +126,6 @@ export const ExportClosingQuerySchema = z.object({
     .regex(/^\d{4}-\d{2}$/, "Formato requerido YYYY-MM")
     .optional(),
   format: z.enum(["xlsx", "csv", "pdf"]).default("xlsx"),
-  avgMode: AveragePriceModeSchema,
 });
 export type ExportClosingQueryInput = z.infer<typeof ExportClosingQuerySchema>;
 
@@ -282,7 +275,6 @@ export interface PnlSummaryDto {
   readonly period: PeriodFilter;
   readonly periodLabel: string;
   readonly method: LotMethod;
-  readonly avgMode: AveragePriceMode;
   readonly merchantBadge: MerchantBadgeType;
   readonly merchantBadgeLabel: string;
   readonly badgeFeePercent: string;
@@ -293,11 +285,9 @@ export interface PnlSummaryDto {
   readonly totalBoughtUsdt: string;
   readonly totalBoughtVes: string;
   readonly totalVolumeUsdt: string;
-  // Promedios y Brecha
+  // Promedios Ponderados y Brecha
   readonly avgSellRateWeightedVes: string;
   readonly avgBuyRateWeightedVes: string;
-  readonly avgSellRateSimpleVes: string;
-  readonly avgBuyRateSimpleVes: string;
   readonly activeAvgSellRateVes: string;
   readonly activeAvgBuyRateVes: string;
   readonly brechaPointsVes: string;

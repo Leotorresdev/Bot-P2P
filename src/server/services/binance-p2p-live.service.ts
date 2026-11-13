@@ -1,4 +1,5 @@
 import "server-only";
+import Decimal from "decimal.js";
 import { getUtcMinus4Parts } from "@/lib/timezone-utc4";
 import {
   HourlyCandlesRepository,
@@ -243,8 +244,8 @@ async function fetchBinanceSide(
     );
     const candidateAds = verifiedAds.length > 0 ? verifiedAds : json.data;
 
-    // Tomamos rigurosamente el 2do anuncio (índice 1) de comerciantes verificados. Si solo hay 1, usamos el primero como fallback
-    const targetAd = candidateAds[1] ?? candidateAds[0];
+    // Tomamos estrictamente el 1er anuncio (índice 0) de comerciantes verificados según el filtro
+    const targetAd = candidateAds[0];
     if (!targetAd) return null;
 
     const parsedPrice = parseFloat(targetAd.adv.price);
@@ -310,9 +311,9 @@ export class BinanceP2PLiveService {
   }
 
   /**
-   * Obtiene la brecha real entre el 2do anuncio de compra y el 2do anuncio de venta
-   * para los bancos nacionales venezolanos, filtrado independientemente por los montos
-   * cotizados en bolívares para compra y para venta (desde 50 Bs. hasta 50.000.000 Bs.).
+   * Obtiene la brecha real entre el 1er anuncio de compra y el 1er anuncio de venta
+   * (índice 0) de comerciantes verificados para los bancos nacionales venezolanos,
+   * filtrado independientemente por Compra Bs y Venta Bs (desde 50 Bs. hasta 50.000.000 Bs.).
    */
   public static async getLiveBrechas(
     buyAmount: number = 100_000,
@@ -340,49 +341,71 @@ export class BinanceP2PLiveService {
           fetchBinanceSide("SELL", config.payType, cleanBuyAmount),
         ]);
 
-        let buyRate2ndNum = buyAdSide?.price;
-        let sellRate2ndNum = sellAdSide?.price;
+        let buyRate1stNum = buyAdSide?.price;
+        let sellRate1stNum = sellAdSide?.price;
         let merchantBuy = buyAdSide?.nick ?? "Comerciante P2P";
         let merchantSell = sellAdSide?.nick ?? "Comerciante P2P";
         let isLive = Boolean(buyAdSide && sellAdSide);
 
         // Fallback resiliente con CriptoYa API pública de Binance P2P si Binance C2C directa no responde
-        if (!buyRate2ndNum || !sellRate2ndNum) {
+        if (!buyRate1stNum || !sellRate1stNum) {
           const criptoYa = await fetchCriptoYaP2P();
           if (criptoYa && criptoYa.ask > 0 && criptoYa.bid > 0) {
-            sellRate2ndNum = Number(criptoYa.ask.toFixed(2));
-            buyRate2ndNum = Number(criptoYa.bid.toFixed(2));
+            sellRate1stNum = new Decimal(criptoYa.ask)
+              .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+              .toNumber();
+            buyRate1stNum = new Decimal(criptoYa.bid)
+              .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+              .toNumber();
             merchantBuy = "Binance_P2P_CriptoYa";
             merchantSell = "Binance_P2P_CriptoYa";
             isLive = true;
           } else {
             const baseRate = 1080.0 + (cleanBuyAmount > 100000 ? 5.0 : 0);
-            buyRate2ndNum = baseRate;
-            sellRate2ndNum = baseRate + (config.bankName === "Pago Móvil" ? 6.5 : 4.8);
+            buyRate1stNum = baseRate;
+            sellRate1stNum =
+              baseRate + (config.bankName === "Pago Móvil" ? 6.5 : 4.8);
             merchantBuy = "P2P_Merchant_Buy";
             merchantSell = "P2P_Merchant_Sell";
             isLive = false;
           }
         }
 
-        const brechaPoints = sellRate2ndNum - buyRate2ndNum;
-        const spreadPct =
-          buyRate2ndNum > 0
-            ? ((brechaPoints / buyRate2ndNum) * 100).toFixed(2)
-            : "0.00";
+        const buyDec = new Decimal(buyRate1stNum).toDecimalPlaces(
+          2,
+          Decimal.ROUND_HALF_UP
+        );
+        const sellDec = new Decimal(sellRate1stNum).toDecimalPlaces(
+          2,
+          Decimal.ROUND_HALF_UP
+        );
+        const rawBrecha = sellDec.minus(buyDec);
+        const brechaDec = rawBrecha.toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+        const normalizedBrecha = brechaDec.isZero()
+          ? new Decimal(0)
+          : brechaDec;
+        const spreadDec = buyDec.gt(0)
+          ? rawBrecha
+              .div(buyDec)
+              .mul(100)
+              .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+          : new Decimal(0);
+        const normalizedSpread = spreadDec.isZero()
+          ? new Decimal(0)
+          : spreadDec;
 
         return {
           bankName: config.bankName,
           filterAmountVes: cleanBuyAmount,
           buyFilterAmountVes: cleanBuyAmount,
           sellFilterAmountVes: cleanSellAmount,
-          buyRate2nd: buyRate2ndNum.toFixed(2),
-          sellRate2nd: sellRate2ndNum.toFixed(2),
-          brechaPointsVes: (brechaPoints >= 0 ? "+" : "") + brechaPoints.toFixed(2),
-          spreadPercent: (brechaPoints >= 0 ? "+" : "") + spreadPct + "%",
+          buyRate2nd: buyDec.toFixed(2),
+          sellRate2nd: sellDec.toFixed(2),
+          brechaPointsVes: `${normalizedBrecha.gte(0) ? "+" : ""}${normalizedBrecha.toFixed(2)}`,
+          spreadPercent: `${normalizedSpread.gte(0) ? "+" : ""}${normalizedSpread.toFixed(2)}%`,
           merchantBuyNick: merchantBuy,
           merchantSellNick: merchantSell,
-          liveRateVes: sellRate2ndNum.toFixed(2),
+          liveRateVes: sellDec.toFixed(2),
           reconciledOrdersToday: config.defaultOrdersToday,
           volumeVesToday: config.defaultVolumeVes,
           isLiveApi: isLive,

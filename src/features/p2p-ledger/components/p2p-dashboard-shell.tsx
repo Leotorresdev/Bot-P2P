@@ -9,7 +9,6 @@ import { SecurityAndClosingsView } from "@/features/p2p-ledger/components/securi
 import { AccountantTaxView } from "@/features/p2p-ledger/components/accountant-tax-view";
 import { ClosingExportModal } from "@/features/p2p-ledger/components/closing-export-panel";
 import type {
-  AveragePriceMode,
   LotMethod,
   PeriodFilter,
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
@@ -23,7 +22,6 @@ export function P2PDashboardShell() {
   const { activeTab, activeRole } = useLedgerUiStore();
   const [period, setPeriod] = React.useState<PeriodFilter>("TODAY");
   const [method] = React.useState<LotMethod>("FIFO");
-  const [avgMode, setAvgMode] = React.useState<AveragePriceMode>("WEIGHTED");
   const [selectedDate, setSelectedDate] = React.useState<string>("");
   const [selectedMonth, setSelectedMonth] = React.useState<string>("");
   const [selectedBank, setSelectedBank] = React.useState<string | null>(null);
@@ -50,8 +48,6 @@ export function P2PDashboardShell() {
             period={period}
             onPeriodChange={setPeriod}
             method={method}
-            avgMode={avgMode}
-            onAvgModeChange={setAvgMode}
             selectedDate={selectedDate}
             onSelectedDateChange={setSelectedDate}
             selectedMonth={selectedMonth}
@@ -76,7 +72,6 @@ export function P2PDashboardShell() {
               </span>
             </div>
             <LiveOperationsLedger
-              defaultAvgMode={avgMode}
               onBackToTerminal={() => setViewMode("TERMINAL")}
             />
           </div>
@@ -86,7 +81,6 @@ export function P2PDashboardShell() {
       )}
 
       <ClosingExportModal
-        defaultAvgMode={avgMode}
         defaultDate={selectedDate || undefined}
         defaultMonth={selectedMonth || undefined}
       />

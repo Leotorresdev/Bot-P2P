@@ -2,7 +2,6 @@ import "server-only";
 import Decimal from "decimal.js";
 import {
   MERCHANT_BADGE_META,
-  type AveragePriceMode,
   type BankLiveMonitorDto,
   type DailyClosingActaDto,
   type LotMethod,
@@ -415,7 +414,6 @@ export function calculateVueltaSummary(params: {
   readonly period: PeriodFilter;
   readonly periodLabel: string;
   readonly method: LotMethod;
-  readonly avgMode: AveragePriceMode;
   readonly badge: MerchantBadgeType;
   readonly seniatTaxPercent?: number;
 }): PnlSummaryDto {
@@ -424,7 +422,6 @@ export function calculateVueltaSummary(params: {
     period,
     periodLabel,
     method,
-    avgMode,
     badge,
     seniatTaxPercent = 16,
   } = params;
@@ -435,9 +432,6 @@ export function calculateVueltaSummary(params: {
   let totalSoldVes = new Decimal(0);
   let totalBoughtUsdt = new Decimal(0);
   let totalBoughtVes = new Decimal(0);
-
-  let sumSellUnitPrices = new Decimal(0);
-  let sumBuyUnitPrices = new Decimal(0);
 
   let completedSellCount = 0;
   let completedBuyCount = 0;
@@ -475,34 +469,20 @@ export function calculateVueltaSummary(params: {
       completedSellCount += 1;
       totalSoldUsdt = totalSoldUsdt.plus(amt);
       totalSoldVes = totalSoldVes.plus(total);
-      sumSellUnitPrices = sumSellUnitPrices.plus(price);
     } else {
       completedBuyCount += 1;
       totalBoughtUsdt = totalBoughtUsdt.plus(amt);
       totalBoughtVes = totalBoughtVes.plus(total);
-      sumBuyUnitPrices = sumBuyUnitPrices.plus(price);
     }
   }
 
-  // 1. Precios Promedio Totales
-  const avgSellWeighted = totalSoldUsdt.gt(0)
+  // 1. Precios Promedio Totales (únicamente ponderado real: Σ Total Bs ÷ Σ Total USDT)
+  const activeAvgSell = totalSoldUsdt.gt(0)
     ? totalSoldVes.div(totalSoldUsdt)
     : new Decimal(0);
-  const avgBuyWeighted = totalBoughtUsdt.gt(0)
+  const activeAvgBuy = totalBoughtUsdt.gt(0)
     ? totalBoughtVes.div(totalBoughtUsdt)
     : new Decimal(0);
-
-  const avgSellSimple =
-    completedSellCount > 0
-      ? sumSellUnitPrices.div(completedSellCount)
-      : new Decimal(0);
-  const avgBuySimple =
-    completedBuyCount > 0
-      ? sumBuyUnitPrices.div(completedBuyCount)
-      : new Decimal(0);
-
-  const activeAvgSell = avgMode === "SIMPLE" ? avgSellSimple : avgSellWeighted;
-  const activeAvgBuy = avgMode === "SIMPLE" ? avgBuySimple : avgBuyWeighted;
 
   // 2. Brecha de Puntos (solo cuando ambos lados tienen volumen completado)
   const hasBothSides = totalSoldUsdt.gt(0) && totalBoughtUsdt.gt(0);
@@ -552,7 +532,6 @@ export function calculateVueltaSummary(params: {
     period,
     periodLabel,
     method,
-    avgMode,
     merchantBadge: badgeMeta.id,
     merchantBadgeLabel: badgeMeta.label,
     badgeFeePercent: String(badgeMeta.feePercent),
@@ -564,10 +543,8 @@ export function calculateVueltaSummary(params: {
     totalBoughtVes: formatDecimalMoney(totalBoughtVes, 2),
     totalVolumeUsdt: formatDecimalMoney(totalVolumeUsdt, 2),
 
-    avgSellRateWeightedVes: formatDecimalMoney(avgSellWeighted, 2),
-    avgBuyRateWeightedVes: formatDecimalMoney(avgBuyWeighted, 2),
-    avgSellRateSimpleVes: formatDecimalMoney(avgSellSimple, 2),
-    avgBuyRateSimpleVes: formatDecimalMoney(avgBuySimple, 2),
+    avgSellRateWeightedVes: formatDecimalMoney(activeAvgSell, 2),
+    avgBuyRateWeightedVes: formatDecimalMoney(activeAvgBuy, 2),
     activeAvgSellRateVes: formatDecimalMoney(activeAvgSell, 2),
     activeAvgBuyRateVes: formatDecimalMoney(activeAvgBuy, 2),
     brechaPointsVes: `${brechaPoints.gte(0) ? "+" : ""}${brechaPoints.toFixed(2)}`,
@@ -897,7 +874,6 @@ export class P2PAccountingService {
     readonly userId: string;
     readonly period: PeriodFilter;
     readonly method: LotMethod;
-    readonly avgMode: AveragePriceMode;
     readonly date?: string;
     readonly month?: string;
   }): Promise<PnlSummaryDto> {
@@ -926,7 +902,6 @@ export class P2PAccountingService {
       period: params.period,
       periodLabel: bounds.periodLabel,
       method: params.method,
-      avgMode: params.avgMode,
       badge: taxConfig.merchantBadge,
       seniatTaxPercent: taxConfig.seniatTaxPercent,
     });
@@ -1055,7 +1030,6 @@ export class P2PAccountingService {
     readonly scope: "DAY" | "MONTH";
     readonly date?: string;
     readonly month?: string;
-    readonly avgMode: AveragePriceMode;
   }): Promise<ClosingReportData> {
     const taxConfig = await SupabaseVaultRepository.getUserTaxConfig(
       params.userId
@@ -1093,7 +1067,6 @@ export class P2PAccountingService {
       period: params.scope === "MONTH" ? "MONTH" : "DAY",
       periodLabel,
       method: "FIFO",
-      avgMode: params.avgMode,
       badge: taxConfig.merchantBadge,
       seniatTaxPercent: taxConfig.seniatTaxPercent,
     });

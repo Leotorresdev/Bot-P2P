@@ -398,14 +398,13 @@ export const routes = baseApp
       if (!user) {
         return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
       }
-      const { period, method, date, month, avgMode } = c.req.valid("query");
+      const { period, method, date, month } = c.req.valid("query");
       const summary = await P2PAccountingService.getSummary({
         userId: user.id,
         period,
         method,
         date,
         month,
-        avgMode,
       });
       return c.json({ data: summary }, 200);
     }
@@ -640,13 +639,12 @@ export const routes = baseApp
         return c.redirect("/login");
       }
 
-      const { scope, date, month, format, avgMode } = c.req.valid("query");
+      const { scope, date, month, format } = c.req.valid("query");
       const report = await P2PAccountingService.buildClosingReport({
         userId: user.id,
         scope,
         date,
         month,
-        avgMode,
       });
 
       const prefix = scope === "MONTH" ? "Cierre_Mensual" : "Cierre_Diario";
@@ -706,7 +704,6 @@ export const routes = baseApp
         monthParam && /^\d{4}-\d{2}$/.test(monthParam)
           ? monthParam
           : undefined,
-      avgMode: "WEIGHTED",
     });
 
     const csvString = buildClosingCsv(report);

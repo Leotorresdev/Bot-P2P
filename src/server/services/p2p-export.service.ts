@@ -62,10 +62,7 @@ export async function buildClosingWorkbookXlsx(
 
   const s = report.summary;
   const badgeMeta = MERCHANT_BADGE_META[s.merchantBadge];
-  const avgLabel =
-    s.avgMode === "SIMPLE"
-      ? "Promedio Aritmético Simple"
-      : "Promedio Ponderado Real (Total Bs / Total USDT)";
+  const avgLabel = "Promedio Ponderado Real (Σ Total Bs ÷ Σ Total USDT)";
 
   // Título Principal
   ws.mergeCells("A1:K1");
