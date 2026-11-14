@@ -925,7 +925,20 @@ export class P2PAccountingService {
 
     const syncPromise = (async (): Promise<readonly P2POrderRowDto[]> => {
       try {
-        return await this.syncBinanceRange(userId, defaultStartMs, defaultEndMs);
+        const existingStored = await SupabaseVaultRepository.getUserOrders(
+          userId
+        );
+        // Si la cuenta ya tiene su historial en Supabase, sincronizar en vivo las últimas 72h
+        // para respuesta instantánea (<1s) en cuentas de alto volumen (+8,000 órdenes).
+        const incrementalStartMs =
+          !forceFresh && existingStored.length > 0
+            ? now - 3 * 86_400_000
+            : defaultStartMs;
+        return await this.syncBinanceRange(
+          userId,
+          incrementalStartMs,
+          defaultEndMs
+        );
       } finally {
         P2PAccountingService.inFlightSyncByUser.delete(userId);
       }
