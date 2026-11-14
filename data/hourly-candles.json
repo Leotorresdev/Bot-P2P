@@ -1000,6 +1000,97 @@
       "buyClose": 1063.11,
       "samplesCount": 10,
       "updatedAt": "2026-11-14T00:37:26.900Z"
+    },
+    {
+      "bankName": "Banesco",
+      "hourBucketUtc": 1794618000,
+      "hourLabelVet": "2026-11-13 21:00 (-4:00 UTC)",
+      "open": 1079.5,
+      "high": 1080,
+      "low": 1078.8,
+      "close": 1080,
+      "buyOpen": 1067,
+      "buyClose": 1069.99,
+      "samplesCount": 22,
+      "updatedAt": "2026-11-14T01:45:46.789Z"
+    },
+    {
+      "bankName": "Pago Móvil",
+      "hourBucketUtc": 1794618000,
+      "hourLabelVet": "2026-11-13 21:00 (-4:00 UTC)",
+      "open": 1088.7,
+      "high": 1089,
+      "low": 1070,
+      "close": 1085,
+      "buyOpen": 1062.3,
+      "buyClose": 1067.5,
+      "samplesCount": 22,
+      "updatedAt": "2026-11-14T01:45:46.789Z"
+    },
+    {
+      "bankName": "Mercantil",
+      "hourBucketUtc": 1794618000,
+      "hourLabelVet": "2026-11-13 21:00 (-4:00 UTC)",
+      "open": 1075,
+      "high": 1087.7,
+      "low": 1070,
+      "close": 1087.7,
+      "buyOpen": 1062.4,
+      "buyClose": 1069,
+      "samplesCount": 22,
+      "updatedAt": "2026-11-14T01:45:46.789Z"
+    },
+    {
+      "bankName": "BBVA",
+      "hourBucketUtc": 1794618000,
+      "hourLabelVet": "2026-11-13 21:00 (-4:00 UTC)",
+      "open": 1075,
+      "high": 1085.8,
+      "low": 1070,
+      "close": 1083.8,
+      "buyOpen": 1068.5,
+      "buyClose": 1069.59,
+      "samplesCount": 22,
+      "updatedAt": "2026-11-14T01:45:46.789Z"
+    },
+    {
+      "bankName": "Banco de Venezuela",
+      "hourBucketUtc": 1794618000,
+      "hourLabelVet": "2026-11-13 21:00 (-4:00 UTC)",
+      "open": 1087.99,
+      "high": 1088,
+      "low": 1080,
+      "close": 1082,
+      "buyOpen": 1068.4,
+      "buyClose": 1070.8,
+      "samplesCount": 22,
+      "updatedAt": "2026-11-14T01:45:46.789Z"
+    },
+    {
+      "bankName": "Bancamiga",
+      "hourBucketUtc": 1794618000,
+      "hourLabelVet": "2026-11-13 21:00 (-4:00 UTC)",
+      "open": 1080.9,
+      "high": 1084,
+      "low": 1080.9,
+      "close": 1083,
+      "buyOpen": 1063.1,
+      "buyClose": 1068.02,
+      "samplesCount": 22,
+      "updatedAt": "2026-11-14T01:45:46.789Z"
+    },
+    {
+      "bankName": "BNC",
+      "hourBucketUtc": 1794618000,
+      "hourLabelVet": "2026-11-13 21:00 (-4:00 UTC)",
+      "open": 1023.5,
+      "high": 1088.99,
+      "low": 1023.5,
+      "close": 1082,
+      "buyOpen": 1068.5,
+      "buyClose": 1067,
+      "samplesCount": 22,
+      "updatedAt": "2026-11-14T01:45:46.789Z"
     }
   ]
 }
