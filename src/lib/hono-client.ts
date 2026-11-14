@@ -18,14 +18,14 @@ const getBaseUrl = (): string => {
 };
 
 export const apiClient = hc<AppType>(getBaseUrl(), {
-  fetch: (input: RequestInfo | URL, init?: RequestInit) =>
-    fetch(input, {
+  fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    return fetch(input, {
       ...init,
       cache: "no-store",
       credentials: "include",
-      headers: {
-        ...(init?.headers ?? {}),
-        "Cache-Control": "no-store, no-cache, must-revalidate",
-      },
-    }),
+      headers,
+    });
+  },
 });

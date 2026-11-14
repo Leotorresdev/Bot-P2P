@@ -12,14 +12,14 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     persistSession: false,
   },
   global: {
-    fetch: (url, options = {}) =>
-      fetch(url, {
+    fetch: (url, options = {}) => {
+      const headers = new Headers(options.headers);
+      headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+      return fetch(url, {
         ...options,
         cache: "no-store",
-        headers: {
-          ...(options.headers ?? {}),
-          "Cache-Control": "no-store, no-cache, must-revalidate",
-        },
-      }),
+        headers,
+      });
+    },
   },
 });
