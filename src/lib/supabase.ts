@@ -11,4 +11,15 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: false,
   },
+  global: {
+    fetch: (url, options = {}) =>
+      fetch(url, {
+        ...options,
+        cache: "no-store",
+        headers: {
+          ...(options.headers ?? {}),
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+        },
+      }),
+  },
 });

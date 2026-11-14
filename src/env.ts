@@ -29,6 +29,22 @@ const serverEnvSchema = z.object({
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
 
+function resolveDefaultAppUrl(): string {
+  if (process.env.BETTER_AUTH_URL) {
+    return process.env.BETTER_AUTH_URL;
+  }
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    return process.env.NEXT_PUBLIC_APP_URL;
+  }
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  }
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL}`;
+  }
+  return "http://localhost:3000";
+}
+
 function validateServerEnv(): ServerEnv {
   const parsed = serverEnvSchema.safeParse({
     NODE_ENV: process.env.NODE_ENV,
@@ -43,7 +59,7 @@ function validateServerEnv(): ServerEnv {
     BETTER_AUTH_SECRET:
       process.env.BETTER_AUTH_SECRET ??
       "8c4e9b2a7f1d6e3c5a0b9f8e7d2c4b6a1e3f5d7c9b0a2e4f6d8c1b3a5e7f9d0c",
-    BETTER_AUTH_URL: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
+    BETTER_AUTH_URL: resolveDefaultAppUrl(),
     MASTER_ENCRYPTION_KEY:
       process.env.MASTER_ENCRYPTION_KEY ??
       "4a9f2e7c1b8d3f6a5e0c9b4d2f7a1e8c3b6d9f0a4e2c7b5d1f8a3e6c9b2d4f7a",

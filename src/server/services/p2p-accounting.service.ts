@@ -20,6 +20,7 @@ import {
   getCurrentVetMonthIso,
   getVetDayRangeMs,
   getVetMonthRangeMs,
+  getVetNDaysRangeMs,
 } from "@/lib/timezone-utc4";
 import {
   decryptBinanceCredentials,
@@ -36,12 +37,15 @@ import {
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 
 const BINANCE_HOSTS = [
-  "https://api.binance.com",
+  "https://api-gcp.binance.com",
+  "https://api4.binance.com",
   "https://api1.binance.com",
   "https://api2.binance.com",
   "https://api3.binance.com",
-  "https://api-gcp.binance.com",
+  "https://api.binance.com",
 ] as const;
+
+const BINANCE_C2C_PAGE_SIZE = 50;
 
 // Binance SAPI limita el intervalo startTimestamp..endTimestamp a 30 días (usamos 28d por seguridad)
 const MAX_BINANCE_WINDOW_MS = 28 * 86_400_000;
@@ -254,8 +258,8 @@ function resolveSyncWindows(
 }
 
 /**
- * Consulta `/sapi/v1/c2c/orderMatch/listUserOrderHistory` paginando 100 en 100
- * sobre todas las sub-ventanas (<= 28 días) para no omitir ninguna orden del período.
+ * Consulta `/sapi/v1/c2c/orderMatch/listUserOrderHistory` paginando de 50 en 50 (tope real de Binance C2C)
+ * con reintento por página entre hosts para evitar respuestas parciales silenciosas en Vercel.
  */
 async function fetchBinanceOrdersInRange(
   apiKey: string,
@@ -263,7 +267,7 @@ async function fetchBinanceOrdersInRange(
   tradeType: "BUY" | "SELL",
   startMs: number,
   endMs: number,
-  maxPagesPerWindow: number = 100
+  maxPagesPerWindow: number = 40
 ): Promise<{
   readonly success: boolean;
   readonly data: readonly BinanceC2COrderItem[];
@@ -275,30 +279,38 @@ async function fetchBinanceOrdersInRange(
   }
 
   let lastError = "";
+  let preferredHostIdx = 0;
+  const accumulated: BinanceC2COrderItem[] = [];
 
-  for (const host of BINANCE_HOSTS) {
-    try {
-      const accumulated: BinanceC2COrderItem[] = [];
-      let hostSucceeded = true;
+  for (const win of windows) {
+    const windowOrders: BinanceC2COrderItem[] = [];
+    let page = 1;
 
-      for (const win of windows) {
-        const windowOrders: BinanceC2COrderItem[] = [];
-        let page = 1;
+    while (page <= maxPagesPerWindow) {
+      let pageItems: BinanceC2COrderItem[] | null = null;
+      let pageTotal: number | undefined;
+      let fatalAuthError = false;
 
-        while (page <= maxPagesPerWindow) {
+      for (let attempt = 0; attempt < BINANCE_HOSTS.length; attempt++) {
+        const hostIdx = (preferredHostIdx + attempt) % BINANCE_HOSTS.length;
+        const host = BINANCE_HOSTS[hostIdx] ?? BINANCE_HOSTS[0];
+
+        try {
           const timestamp = Date.now();
-          // Mantener orden exacto de parámetros para firma HMAC-SHA256 en Binance SAPI
-          const queryString = `tradeType=${tradeType}&startTimestamp=${win.startMs}&endTimestamp=${win.endMs}&page=${page}&rows=100&recvWindow=60000&timestamp=${timestamp}`;
+          // Mantener orden exacto de parámetros para firma HMAC-SHA256 en Binance SAPI (rows=50 es el máximo real de C2C)
+          const queryString = `tradeType=${tradeType}&startTimestamp=${win.startMs}&endTimestamp=${win.endMs}&page=${page}&rows=${BINANCE_C2C_PAGE_SIZE}&recvWindow=60000&timestamp=${timestamp}`;
           const signature = signBinanceQuery(queryString, apiSecret);
 
           const res = await fetch(
             `${host}/sapi/v1/c2c/orderMatch/listUserOrderHistory?${queryString}&signature=${signature}`,
             {
               method: "GET",
+              cache: "no-store",
               headers: {
                 "X-MBX-APIKEY": apiKey,
+                "Cache-Control": "no-store, no-cache, must-revalidate",
               },
-              signal: AbortSignal.timeout(15000),
+              signal: AbortSignal.timeout(12000),
             }
           );
 
@@ -315,49 +327,65 @@ async function fetchBinanceOrdersInRange(
             res.ok &&
             (json.code === "000000" || json.code === 0 || json.code === "0")
           ) {
-            const items = Array.isArray(json.data) ? json.data : [];
-            windowOrders.push(...items);
-
-            if (
-              items.length === 0 ||
-              items.length < 100 ||
-              (typeof json.total === "number" &&
-                windowOrders.length >= json.total)
-            ) {
-              break;
-            }
-            page++;
-          } else {
-            lastError = json.message || json.msg || `HTTP ${res.status}`;
-            hostSucceeded = false;
+            preferredHostIdx = hostIdx;
+            pageItems = Array.isArray(json.data) ? json.data : [];
+            pageTotal = typeof json.total === "number" ? json.total : undefined;
             break;
           }
+
+          lastError = json.message || json.msg || `HTTP ${res.status}`;
+          console.warn(
+            `[Binance SAPI C2C] Host ${host} (page ${page}) respondió:`,
+            lastError
+          );
+
+          if (
+            lastError.includes("-2008") ||
+            lastError.includes("-2014") ||
+            lastError.includes("-1022")
+          ) {
+            fatalAuthError = true;
+            break;
+          }
+        } catch (err) {
+          lastError = err instanceof Error ? err.message : String(err);
+          console.warn(
+            `[Binance SAPI C2C] Falló host ${host} (page ${page}):`,
+            lastError
+          );
         }
-
-        if (!hostSucceeded) break;
-        accumulated.push(...windowOrders);
       }
 
-      if (hostSucceeded) {
-        return { success: true, data: accumulated };
+      if (pageItems === null) {
+        return {
+          success: false,
+          data: accumulated,
+          error: lastError || "No se pudo completar la paginación con Binance.",
+        };
       }
 
-      console.warn(`[Binance SAPI C2C] Host ${host} respondió:`, lastError);
+      if (fatalAuthError) {
+        return { success: false, data: [], error: lastError };
+      }
+
+      windowOrders.push(...pageItems);
 
       if (
-        lastError.includes("-2008") ||
-        lastError.includes("-2014") ||
-        lastError.includes("-1022")
+        pageItems.length === 0 ||
+        pageItems.length < BINANCE_C2C_PAGE_SIZE ||
+        (pageTotal !== undefined &&
+          pageTotal > 0 &&
+          windowOrders.length >= pageTotal)
       ) {
         break;
       }
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-      console.warn(`[Binance SAPI C2C] Falló host ${host}:`, lastError);
+      page++;
     }
+
+    accumulated.push(...windowOrders);
   }
 
-  return { success: false, data: [], error: lastError };
+  return { success: true, data: accumulated };
 }
 
 function mapRawItemsToStoredRecords(
@@ -634,20 +662,20 @@ function resolvePeriodBounds(params: {
   }
 
   if (period === "7D") {
-    const now = Date.now();
+    const range7d = getVetNDaysRangeMs(7);
     return {
-      startMs: now - 7 * 86_400_000,
-      endMs: now + 60_000,
-      periodLabel: "Últimos 7 días",
+      startMs: range7d.startMs,
+      endMs: range7d.endMs,
+      periodLabel: "Últimos 7 días (-4:00 UTC)",
     };
   }
 
   if (period === "30D") {
-    const now = Date.now();
+    const range30d = getVetNDaysRangeMs(30);
     return {
-      startMs: now - 30 * 86_400_000,
-      endMs: now + 60_000,
-      periodLabel: "Últimos 30 días",
+      startMs: range30d.startMs,
+      endMs: range30d.endMs,
+      periodLabel: "Últimos 30 días (-4:00 UTC)",
     };
   }
 
@@ -707,8 +735,10 @@ export class P2PAccountingService {
             `${host}/sapi/v1/c2c/orderMatch/listUserOrderHistory?${queryString}&signature=${signature}`,
             {
               method: "GET",
+              cache: "no-store",
               headers: {
                 "X-MBX-APIKEY": apiKey,
+                "Cache-Control": "no-store, no-cache, must-revalidate",
               },
               signal: AbortSignal.timeout(12000),
             }
@@ -779,8 +809,9 @@ export class P2PAccountingService {
   }
 
   /**
-   * Sincroniza desde Binance un rango específico (ej. Día o Mes completo paginado de 100 en 100)
-   * y guarda todas las órdenes (todos los estados/tipos) en la base de datos.
+   * Sincroniza desde Binance un rango específico (paginado de 50 en 50)
+   * y guarda todas las órdenes (todos los estados/tipos) en la base de datos,
+   * fusionando en memoria los registros frescos para garantizar paridad inmediata en Vercel.
    */
   public static async syncBinanceRange(
     userId: string,
@@ -793,6 +824,8 @@ export class P2PAccountingService {
       const stored = await SupabaseVaultRepository.getUserOrders(userId);
       return stored.map(toMirrorOrderDto);
     }
+
+    let freshRecords: StoredP2POrderRecord[] = [];
 
     try {
       const { apiKey, apiSecret } = decryptBinanceCredentials(
@@ -808,8 +841,8 @@ export class P2PAccountingService {
 
       const combined = [...buyRes.data, ...sellRes.data];
       if (combined.length > 0) {
-        const records = mapRawItemsToStoredRecords(userId, combined);
-        await SupabaseVaultRepository.saveUserOrders(userId, records);
+        freshRecords = mapRawItemsToStoredRecords(userId, combined);
+        await SupabaseVaultRepository.saveUserOrders(userId, freshRecords);
         this.lastSyncTimestampByUser.set(userId, Date.now());
       }
     } catch (err) {
@@ -820,7 +853,27 @@ export class P2PAccountingService {
     }
 
     const storedAfter = await SupabaseVaultRepository.getUserOrders(userId);
-    return storedAfter.map(toMirrorOrderDto);
+    if (freshRecords.length === 0) {
+      return storedAfter.map(toMirrorOrderDto);
+    }
+
+    const mergedMap = new Map<string, StoredP2POrderRecord>();
+    for (const oldRec of storedAfter) {
+      mergedMap.set(oldRec.orderNumber, oldRec);
+    }
+    // Priorizar siempre los registros recién traídos de Binance para sanear cualquier fila v1 antigua
+    for (const fresh of freshRecords) {
+      mergedMap.set(fresh.orderNumber, fresh);
+    }
+
+    const mergedSorted = Array.from(mergedMap.values()).sort((a, b) => {
+      if (b.createTimeMs !== a.createTimeMs) {
+        return b.createTimeMs - a.createTimeMs;
+      }
+      return b.orderNumber.localeCompare(a.orderNumber);
+    });
+
+    return mergedSorted.map(toMirrorOrderDto);
   }
 
   /**
@@ -829,7 +882,8 @@ export class P2PAccountingService {
    */
   public static async getUserOrdersFromVaultOrBinance(
     userId: string,
-    forceFresh: boolean = false
+    forceFresh: boolean = false,
+    targetBounds?: { readonly startMs: number | null; readonly endMs: number | null }
   ): Promise<readonly P2POrderRowDto[]> {
     const credential =
       await SupabaseVaultRepository.getBinanceCredential(userId);
@@ -840,23 +894,38 @@ export class P2PAccountingService {
     }
 
     const now = Date.now();
+    const defaultStartMs = now - MAX_BINANCE_WINDOW_MS;
+    const defaultEndMs = now + 60_000;
+    const needsCustomRange =
+      targetBounds?.startMs !== null &&
+      targetBounds?.startMs !== undefined &&
+      targetBounds.startMs < defaultStartMs;
+
     const lastSync = this.lastSyncTimestampByUser.get(userId) ?? 0;
 
-    if (!forceFresh && now - lastSync < 6000) {
+    if (!forceFresh && !needsCustomRange && now - lastSync < 5000) {
       const cached = await SupabaseVaultRepository.getUserOrders(userId);
-      return cached.map(toMirrorOrderDto);
+      if (cached.length > 0) {
+        return cached.map(toMirrorOrderDto);
+      }
+    }
+
+    if (needsCustomRange && targetBounds?.startMs && targetBounds?.endMs) {
+      return this.syncBinanceRange(
+        userId,
+        targetBounds.startMs,
+        Math.max(targetBounds.endMs, defaultEndMs)
+      );
     }
 
     const activePromise = this.inFlightSyncByUser.get(userId);
-    if (activePromise) {
+    if (activePromise && !forceFresh) {
       return activePromise;
     }
 
     const syncPromise = (async (): Promise<readonly P2POrderRowDto[]> => {
       try {
-        const endMs = Date.now() + 60_000;
-        const startMs = Date.now() - MAX_BINANCE_WINDOW_MS;
-        return await this.syncBinanceRange(userId, startMs, endMs);
+        return await this.syncBinanceRange(userId, defaultStartMs, defaultEndMs);
       } finally {
         P2PAccountingService.inFlightSyncByUser.delete(userId);
       }
@@ -877,16 +946,16 @@ export class P2PAccountingService {
     readonly date?: string;
     readonly month?: string;
   }): Promise<PnlSummaryDto> {
-    const [allMirrorOrders, taxConfig] = await Promise.all([
-      this.getUserOrdersFromVaultOrBinance(params.userId),
-      SupabaseVaultRepository.getUserTaxConfig(params.userId),
-    ]);
-
     const bounds = resolvePeriodBounds({
       period: params.period,
       date: params.date,
       month: params.month,
     });
+
+    const [allMirrorOrders, taxConfig] = await Promise.all([
+      this.getUserOrdersFromVaultOrBinance(params.userId, false, bounds),
+      SupabaseVaultRepository.getUserTaxConfig(params.userId),
+    ]);
 
     const periodOrders =
       bounds.startMs !== null && bounds.endMs !== null
@@ -932,16 +1001,6 @@ export class P2PAccountingService {
     readonly inProgressCount: number;
     readonly availableDates: readonly string[];
   }> {
-    const allOrders = await this.getUserOrdersFromVaultOrBinance(params.userId);
-
-    const dateSet = new Set<string>();
-    for (const ord of allOrders) {
-      if (ord.dateLabelVet) {
-        dateSet.add(ord.dateLabelVet);
-      }
-    }
-    const availableDates = Array.from(dateSet);
-
     // Filtrado únicamente por parámetros explícitos del usuario (por defecto period="ALL", status="ALL")
     const effectivePeriod: PeriodFilter =
       params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date)
@@ -958,6 +1017,20 @@ export class P2PAccountingService {
             date: params.date,
             month: params.month,
           });
+
+    const allOrders = await this.getUserOrdersFromVaultOrBinance(
+      params.userId,
+      false,
+      bounds
+    );
+
+    const dateSet = new Set<string>();
+    for (const ord of allOrders) {
+      if (ord.dateLabelVet) {
+        dateSet.add(ord.dateLabelVet);
+      }
+    }
+    const availableDates = Array.from(dateSet);
 
     const filtered = allOrders.filter((order) => {
       if (bounds.startMs !== null && bounds.endMs !== null) {

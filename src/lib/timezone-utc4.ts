@@ -184,3 +184,29 @@ export function getVetMonthRangeMs(monthIso: string): {
     labelEs: formatMonthIsoEs(`${match[1]}-${match[2]}`),
   };
 }
+
+/**
+ * Devuelve los límites exactos en ms UTC de un rango de N días calendario en Venezuela
+ * (desde las 00:00:00.000 VET de hace N-1 días hasta las 23:59:59.999 VET del día final).
+ */
+export function getVetNDaysRangeMs(
+  days: number,
+  endDateIso: string = getCurrentVetDateIso()
+): {
+  readonly startMs: number;
+  readonly endMs: number;
+  readonly startDateIso: string;
+  readonly endDateIso: string;
+} {
+  const safeDays = Math.max(1, Math.floor(days));
+  const endDayRange = getVetDayRangeMs(endDateIso);
+  const startMs = endDayRange.startMs - (safeDays - 1) * 86_400_000;
+  const startDateIso = formatVetOrderTimestamp(startMs).dateIso;
+
+  return {
+    startMs,
+    endMs: endDayRange.endMs,
+    startDateIso,
+    endDateIso: endDayRange.dateIso,
+  };
+}

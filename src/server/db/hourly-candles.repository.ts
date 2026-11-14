@@ -1,5 +1,6 @@
 import "server-only";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { supabase } from "@/lib/supabase";
 import { getUtcMinus4Parts } from "@/lib/timezone-utc4";
@@ -42,8 +43,11 @@ interface SupabaseHourlyCandleRow {
   updated_at: string;
 }
 
-const DATA_DIR = path.join(process.cwd(), "data");
+const SEED_DATA_DIR = path.join(process.cwd(), "data");
+const TMP_DATA_DIR = path.join(os.tmpdir(), "bot-p2p-data");
+const DATA_DIR = process.env.VERCEL ? TMP_DATA_DIR : SEED_DATA_DIR;
 const CANDLES_FILE_PATH = path.join(DATA_DIR, "hourly-candles.json");
+const SEED_CANDLES_FILE_PATH = path.join(SEED_DATA_DIR, "hourly-candles.json");
 const MAX_HOURS_PER_BANK = 720; // 30 días de velas de 1H por banco
 
 const MEMORY_CANDLES = new Map<string, StoredHourlyCandleRecord>();
@@ -77,8 +81,13 @@ function ensureLocalLoaded(): void {
   if (localFileLoaded) return;
   localFileLoaded = true;
   try {
-    if (!fs.existsSync(CANDLES_FILE_PATH)) return;
-    const raw = fs.readFileSync(CANDLES_FILE_PATH, "utf8");
+    const fileToRead = fs.existsSync(CANDLES_FILE_PATH)
+      ? CANDLES_FILE_PATH
+      : fs.existsSync(SEED_CANDLES_FILE_PATH)
+      ? SEED_CANDLES_FILE_PATH
+      : null;
+    if (!fileToRead) return;
+    const raw = fs.readFileSync(fileToRead, "utf8");
     const parsed = JSON.parse(raw) as Partial<LocalCandlesFile>;
     for (const item of parsed.candles ?? []) {
       if (item && item.bankName && typeof item.hourBucketUtc === "number") {

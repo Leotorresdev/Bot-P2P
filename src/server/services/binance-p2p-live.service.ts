@@ -217,8 +217,10 @@ async function fetchBinanceSide(
       "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search",
       {
         method: "POST",
+        cache: "no-store",
         headers: {
           "Content-Type": "application/json",
+          "Cache-Control": "no-store, no-cache, must-revalidate",
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         },

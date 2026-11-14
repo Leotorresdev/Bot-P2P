@@ -69,24 +69,67 @@ const loginBruteForceStore = new Map<
 
 const baseApp = new Hono<HonoEnv>().basePath("/api");
 
-// 1. Middlewares Globales de Endurecimiento (OWASP)
+function isAllowedOrigin(origin: string, requestUrl?: string): boolean {
+  if (!origin) return true;
+  if (origin === env.BETTER_AUTH_URL) return true;
+  if (
+    origin === "http://localhost:3000" ||
+    origin === "http://127.0.0.1:3000" ||
+    origin.startsWith("http://localhost:") ||
+    origin.startsWith("http://127.0.0.1:")
+  ) {
+    return true;
+  }
+  if (origin.endsWith(".vercel.app")) {
+    return true;
+  }
+  if (requestUrl) {
+    try {
+      const reqOrigin = new URL(requestUrl).origin;
+      if (origin === reqOrigin) return true;
+    } catch {
+      // ignore invalid URL
+    }
+  }
+  return false;
+}
+
+// 1. Middlewares Globales de Endurecimiento (OWASP) + Paridad Localhost/Vercel
 baseApp.use("*", secureHeaders());
 baseApp.use(
   "*",
   cors({
-    origin: env.BETTER_AUTH_URL,
-    allowMethods: ["GET", "POST", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization", "X-Ledger-Role"],
+    origin: (origin, c) =>
+      isAllowedOrigin(origin, c.req.url) ? origin : env.BETTER_AUTH_URL,
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Ledger-Role",
+      "Cache-Control",
+      "Pragma",
+    ],
     credentials: true,
   })
 );
-baseApp.use("*", csrf({ origin: env.BETTER_AUTH_URL }));
+baseApp.use(
+  "*",
+  csrf({
+    origin: (origin, c) => isAllowedOrigin(origin, c.req.url),
+  })
+);
 
-// 2. RequestId + Rate Limiting + Resolución Estricta de Sesión (Sin usuarios falsos por defecto)
+// 2. RequestId + No-Store Headers + Rate Limiting + Resolución Estricta de Sesión
 baseApp.use("*", async (c, next) => {
   const requestId = crypto.randomUUID();
   c.set("requestId", requestId);
   c.header("X-Request-Id", requestId);
+  c.header(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, proxy-revalidate"
+  );
+  c.header("Pragma", "no-cache");
+  c.header("Expires", "0");
 
   const clientIp =
     c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "127.0.0.1";

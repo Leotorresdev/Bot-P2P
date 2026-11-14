@@ -1,5 +1,6 @@
 import "server-only";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import Decimal from "decimal.js";
 import { supabase } from "@/lib/supabase";
@@ -73,15 +74,117 @@ interface LocalVaultDatabase {
   taxConfigs?: StoredUserTaxConfigRecord[];
 }
 
-const DATA_DIR = path.join(process.cwd(), "data");
+const SEED_DATA_DIR = path.join(process.cwd(), "data");
+const TMP_DATA_DIR = path.join(os.tmpdir(), "bot-p2p-data");
+const DATA_DIR = process.env.VERCEL ? TMP_DATA_DIR : SEED_DATA_DIR;
 const DB_FILE_PATH = path.join(DATA_DIR, "vault-db.json");
+const SEED_DB_FILE_PATH = path.join(SEED_DATA_DIR, "vault-db.json");
+
+let memoryVaultDb: LocalVaultDatabase | null = null;
+let p2pOrdersHasV2Columns: boolean | null = null;
+
+function packOrderV2Metadata(o: StoredP2POrderRecord): string {
+  const cleanCostBasis =
+    String(o.costBasisRateVes ?? "0").split("|")[0] || "0";
+  return [
+    "v2",
+    String(o.createTimeMs || 0),
+    String(o.orderStatus || "COMPLETED"),
+    String(o.statusCategory || "COMPLETED"),
+    String(o.totalPriceVes || "0"),
+    String(o.advNo || ""),
+    String(o.asset || "USDT"),
+    String(o.fiat || "VES"),
+    cleanCostBasis,
+  ].join("|");
+}
+
+function unpackOrderV2Metadata(rawCostBasis: unknown): {
+  readonly isV2Packed: boolean;
+  readonly createTimeMs: number;
+  readonly orderStatus?: string;
+  readonly statusCategory?: OrderStatusCategory;
+  readonly totalPriceVes?: string;
+  readonly advNo?: string;
+  readonly asset?: string;
+  readonly fiat?: string;
+  readonly costBasisRateVes: string;
+} {
+  const str = String(rawCostBasis ?? "0");
+  if (!str.startsWith("v2|")) {
+    return {
+      isV2Packed: false,
+      createTimeMs: 0,
+      costBasisRateVes: str,
+    };
+  }
+  const parts = str.split("|");
+  const createTimeMs = Number(parts[1] ?? 0);
+  const orderStatus = parts[2] || undefined;
+  const statusCategory = (parts[3] || undefined) as
+    | OrderStatusCategory
+    | undefined;
+  const totalPriceVes = parts[4] || undefined;
+  const advNo = parts[5] ?? "";
+  const asset = parts[6] || "USDT";
+  const fiat = parts[7] || "VES";
+  const costBasisRateVes = parts[8] || "0";
+
+  return {
+    isV2Packed: true,
+    createTimeMs: Number.isFinite(createTimeMs) ? createTimeMs : 0,
+    orderStatus,
+    statusCategory,
+    totalPriceVes,
+    advNo,
+    asset,
+    fiat,
+    costBasisRateVes,
+  };
+}
+
+function packBadgeTaxMeta(
+  baseValue: string,
+  badge: MerchantBadgeType,
+  seniatTaxPercent: number
+): string {
+  const cleanBase = String(baseValue ?? "").split("|")[0] || "enc:aes256:server-only";
+  return `${cleanBase}|badge:${badge}|tax:${seniatTaxPercent}`;
+}
+
+function unpackBadgeTaxMeta(raw: unknown): {
+  readonly badge?: MerchantBadgeType;
+  readonly seniatTaxPercent?: number;
+} {
+  const str = String(raw ?? "");
+  if (!str.includes("|badge:")) {
+    return {};
+  }
+  const badgeMatch = /\|badge:(BRONZE|SILVER|GOLD)/.exec(str);
+  const taxMatch = /\|tax:([0-9.]+)/.exec(str);
+  const badge = badgeMatch?.[1] as MerchantBadgeType | undefined;
+  const parsedTax = taxMatch?.[1] ? Number(taxMatch[1]) : undefined;
+  return {
+    badge,
+    seniatTaxPercent:
+      parsedTax !== undefined && Number.isFinite(parsedTax)
+        ? parsedTax
+        : undefined,
+  };
+}
 
 function readLocalDb(): LocalVaultDatabase {
   try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    if (!fs.existsSync(DB_FILE_PATH)) {
+    const fileToRead = fs.existsSync(DB_FILE_PATH)
+      ? DB_FILE_PATH
+      : !process.env.VERCEL && fs.existsSync(SEED_DB_FILE_PATH)
+      ? SEED_DB_FILE_PATH
+      : null;
+
+    if (!fileToRead) {
+      if (memoryVaultDb) {
+        return memoryVaultDb;
+      }
       const emptyDb: LocalVaultDatabase = {
         users: [],
         credentials: [],
@@ -89,31 +192,37 @@ function readLocalDb(): LocalVaultDatabase {
         closings: [],
         taxConfigs: [],
       };
-      fs.writeFileSync(DB_FILE_PATH, JSON.stringify(emptyDb, null, 2), "utf8");
+      memoryVaultDb = emptyDb;
       return emptyDb;
     }
-    const raw = fs.readFileSync(DB_FILE_PATH, "utf8");
+    const raw = fs.readFileSync(fileToRead, "utf8");
     const parsed = JSON.parse(raw) as Partial<LocalVaultDatabase>;
-    return {
+    const loaded: LocalVaultDatabase = {
       users: parsed.users ?? [],
       credentials: parsed.credentials ?? [],
       orders: parsed.orders ?? [],
       closings: parsed.closings ?? [],
       taxConfigs: parsed.taxConfigs ?? [],
     };
+    memoryVaultDb = loaded;
+    return loaded;
   } catch {
+    if (memoryVaultDb) {
+      return memoryVaultDb;
+    }
     return { users: [], credentials: [], orders: [], closings: [], taxConfigs: [] };
   }
 }
 
 function writeLocalDb(db: LocalVaultDatabase): void {
+  memoryVaultDb = db;
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
     fs.writeFileSync(DB_FILE_PATH, JSON.stringify(db, null, 2), "utf8");
-  } catch (err) {
-    console.error("[VaultRepository] Error escribiendo persistencia:", err);
+  } catch {
+    // En Vercel serverless, el respaldo primario es Supabase y memoryVaultDb/tmpdir
   }
 }
 
@@ -140,7 +249,7 @@ export class SupabaseVaultRepository {
           fullName: String(data.full_name),
           passwordHash: String(data.password_hash),
           passwordSalt: String(data.password_salt),
-          totpSecret: String(data.totp_secret),
+          totpSecret: String(data.totp_secret ?? "").split("|")[0] || "",
           role: "OPERATOR",
           createdAt: String(data.created_at),
         };
@@ -175,7 +284,7 @@ export class SupabaseVaultRepository {
           fullName: String(data.full_name),
           passwordHash: String(data.password_hash),
           passwordSalt: String(data.password_salt),
-          totpSecret: String(data.totp_secret),
+          totpSecret: String(data.totp_secret ?? "").split("|")[0] || "",
           role: "OPERATOR",
           createdAt: String(data.created_at),
         };
@@ -265,13 +374,25 @@ export class SupabaseVaultRepository {
   public static async saveBinanceCredential(
     cred: StoredVaultCredentialRecord
   ): Promise<void> {
+    let secretMetaToSave = cred.apiSecretEncrypted;
+    try {
+      const existingTax = await this.getUserTaxConfig(cred.userId);
+      secretMetaToSave = packBadgeTaxMeta(
+        cred.apiSecretEncrypted,
+        existingTax.merchantBadge,
+        existingTax.seniatTaxPercent
+      );
+    } catch {
+      // ignore
+    }
+
     try {
       await supabase.from("api_credentials").upsert({
         user_id: cred.userId,
         label: cred.label,
         api_key_masked: cred.apiKeyMasked,
         api_key_encrypted: cred.apiKeyEncrypted,
-        api_secret_encrypted: cred.apiSecretEncrypted,
+        api_secret_encrypted: secretMetaToSave,
         iv: cred.iv,
         auth_tag: cred.authTag,
         is_read_only_verified: cred.isReadOnlyVerified,
@@ -283,7 +404,10 @@ export class SupabaseVaultRepository {
 
     const db = readLocalDb();
     const others = db.credentials.filter((c) => c.userId !== cred.userId);
-    others.push(cred);
+    others.push({
+      ...cred,
+      apiSecretEncrypted: secretMetaToSave,
+    });
     db.credentials = others;
     writeLocalDb(db);
   }
@@ -294,20 +418,37 @@ export class SupabaseVaultRepository {
   public static async getUserOrders(
     userId: string
   ): Promise<readonly StoredP2POrderRecord[]> {
-    const parseCreateTimeFallback = (label: string): number => {
-      // Soporta "DD/MM/YYYY HH:mm:ss" o "DD/MM/YYYY • HH:mm:ss ..."
+    const parseCreateTimeFallback = (
+      label: string,
+      createdAtIso?: string
+    ): number => {
+      // Soporta "DD/MM/YYYY HH:mm:ss" o "DD/MM/YYYY • HH:mm:ss a. m./p. m."
       const m =
         /(\d{2})\/(\d{2})\/(\d{4})[^\d]+(\d{1,2}):(\d{2}):(\d{2})/.exec(
           label
         );
-      if (!m) return 0;
-      const day = Number(m[1]);
-      const month = Number(m[2]);
-      const year = Number(m[3]);
-      const hh = Number(m[4]);
-      const mm = Number(m[5]);
-      const ss = Number(m[6]);
-      return Date.UTC(year, month - 1, day, hh, mm, ss) - UTC_MINUS_4_OFFSET_MS;
+      if (m) {
+        const day = Number(m[1]);
+        const month = Number(m[2]);
+        const year = Number(m[3]);
+        let hh = Number(m[4]);
+        const mm = Number(m[5]);
+        const ss = Number(m[6]);
+        const isPm = /p\.?\s*m\.?/i.test(label);
+        const isAm = /a\.?\s*m\.?/i.test(label);
+        if (isPm && hh < 12) hh += 12;
+        if (isAm && hh === 12) hh = 0;
+        return (
+          Date.UTC(year, month - 1, day, hh, mm, ss) - UTC_MINUS_4_OFFSET_MS
+        );
+      }
+      if (createdAtIso) {
+        const parsedIso = Date.parse(createdAtIso);
+        if (Number.isFinite(parsedIso) && parsedIso > 0) {
+          return parsedIso;
+        }
+      }
+      return 0;
     };
 
     const normalizeStatusCat = (rawStatus: string): OrderStatusCategory => {
@@ -337,65 +478,114 @@ export class SupabaseVaultRepository {
       .filter((o) => o.userId === userId)
       .map((o) => {
         const legacy = o as Partial<StoredP2POrderRecord>;
+        const unpacked = unpackOrderV2Metadata(o.costBasisRateVes);
         const createTimeMs =
           legacy.createTimeMs && legacy.createTimeMs > 0
             ? legacy.createTimeMs
+            : unpacked.createTimeMs > 0
+            ? unpacked.createTimeMs
             : parseCreateTimeFallback(o.timeVetLabel);
-        const orderStatus = legacy.orderStatus ?? "COMPLETED";
+        const orderStatus =
+          legacy.orderStatus ?? unpacked.orderStatus ?? "COMPLETED";
         return {
           ...o,
-          advNo: legacy.advNo ?? "",
+          advNo: legacy.advNo ?? unpacked.advNo ?? "",
           createTimeMs,
           orderStatus,
           statusCategory:
-            legacy.statusCategory ?? normalizeStatusCat(orderStatus),
-          asset: legacy.asset ?? "USDT",
-          fiat: legacy.fiat ?? "VES",
-          totalPriceVes: legacy.totalPriceVes ?? "0",
+            legacy.statusCategory ??
+            unpacked.statusCategory ??
+            normalizeStatusCat(orderStatus),
+          asset: legacy.asset ?? unpacked.asset ?? "USDT",
+          fiat: legacy.fiat ?? unpacked.fiat ?? "VES",
+          totalPriceVes:
+            legacy.totalPriceVes ?? unpacked.totalPriceVes ?? "0",
+          costBasisRateVes: unpacked.costBasisRateVes,
         } satisfies StoredP2POrderRecord;
       });
     const localMap = new Map(localUserOrders.map((o) => [o.orderNumber, o]));
 
     try {
-      let queryRes = await supabase
-        .from("p2p_orders")
-        .select("*")
-        .eq("user_id", userId)
-        .order("create_time_ms", { ascending: false })
-        .limit(5000);
+      const SUPABASE_PAGE_SIZE = 1000;
+      const MAX_SUPABASE_PAGES = 10;
+      const allRows: Array<Record<string, unknown>> = [];
 
-      if (queryRes.error) {
-        // Fallback si la columna create_time_ms aún no ha sido migrada en Supabase
-        queryRes = await supabase
-          .from("p2p_orders")
-          .select("*")
-          .eq("user_id", userId)
-          .order("created_at", { ascending: false })
-          .limit(5000);
+      for (let pageIdx = 0; pageIdx < MAX_SUPABASE_PAGES; pageIdx++) {
+        const from = pageIdx * SUPABASE_PAGE_SIZE;
+        const to = from + SUPABASE_PAGE_SIZE - 1;
+
+        let queryRes =
+          p2pOrdersHasV2Columns !== false
+            ? await supabase
+                .from("p2p_orders")
+                .select("*")
+                .eq("user_id", userId)
+                .order("create_time_ms", { ascending: false })
+                .range(from, to)
+            : null;
+
+        if (!queryRes || queryRes.error) {
+          if (queryRes?.error) {
+            p2pOrdersHasV2Columns = false;
+          }
+          queryRes = await supabase
+            .from("p2p_orders")
+            .select("*")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false })
+            .range(from, to);
+        } else if (p2pOrdersHasV2Columns === null) {
+          p2pOrdersHasV2Columns = true;
+        }
+
+        if (queryRes.error || !queryRes.data || queryRes.data.length === 0) {
+          break;
+        }
+
+        allRows.push(...(queryRes.data as Array<Record<string, unknown>>));
+        if (queryRes.data.length < SUPABASE_PAGE_SIZE) {
+          break;
+        }
       }
 
-      if (!queryRes.error && queryRes.data && queryRes.data.length > 0) {
-        const remoteRecords: StoredP2POrderRecord[] = queryRes.data.map((row) => {
+      if (allRows.length > 0) {
+        const remoteRecords: StoredP2POrderRecord[] = allRows.map((row) => {
           const ordNum = String(row.order_number);
           const localMatch = localMap.get(ordNum);
+          const unpacked = unpackOrderV2Metadata(row.cost_basis_rate_ves);
           const label = String(row.time_vet_label);
           const rowTimeMs = Number(row.create_time_ms ?? 0);
           const createTimeMs =
             rowTimeMs > 0
               ? rowTimeMs
-              : localMatch?.createTimeMs || parseCreateTimeFallback(label);
+              : unpacked.createTimeMs > 0
+              ? unpacked.createTimeMs
+              : localMatch?.createTimeMs ||
+                parseCreateTimeFallback(
+                  label,
+                  row.created_at ? String(row.created_at) : undefined
+                );
           const orderStatus = String(
-            row.order_status ?? localMatch?.orderStatus ?? "COMPLETED"
+            row.order_status ??
+              unpacked.orderStatus ??
+              localMatch?.orderStatus ??
+              "COMPLETED"
           );
           const statusCategory = row.order_status
             ? normalizeStatusCat(orderStatus)
             : ((row.status_category ??
+                unpacked.statusCategory ??
                 localMatch?.statusCategory ??
                 normalizeStatusCat(orderStatus)) as OrderStatusCategory);
 
+          const amountStr = String(row.amount_usdt ?? "0");
+          const unitPriceStr = String(row.unit_price_ves ?? "0");
+
           return {
             orderNumber: ordNum,
-            advNo: String(row.adv_no ?? localMatch?.advNo ?? ""),
+            advNo: String(
+              row.adv_no ?? unpacked.advNo ?? localMatch?.advNo ?? ""
+            ),
             userId: String(row.user_id),
             createTimeMs,
             timeVetLabel: label,
@@ -404,25 +594,46 @@ export class SupabaseVaultRepository {
             statusCategory,
             advertisementRole:
               row.advertisement_role === "TAKER" ? "TAKER" : "MAKER",
-            asset: String(row.asset || localMatch?.asset || "USDT"),
-            fiat: String(row.fiat || localMatch?.fiat || "VES"),
+            asset: String(
+              row.asset || unpacked.asset || localMatch?.asset || "USDT"
+            ),
+            fiat: String(
+              row.fiat || unpacked.fiat || localMatch?.fiat || "VES"
+            ),
             payMethodName: String(row.pay_method_name || "Banesco"),
             counterPartNickName: String(row.counter_part_nick_name),
-            amountUsdt: String(row.amount_usdt),
+            amountUsdt: amountStr,
             commissionUsdt: String(row.commission_usdt ?? "0"),
-            unitPriceVes: String(row.unit_price_ves),
+            unitPriceVes: unitPriceStr,
             totalPriceVes: (() => {
+              const candidateTotal =
+                row.total_price_ves ??
+                unpacked.totalPriceVes ??
+                localMatch?.totalPriceVes ??
+                "0";
               try {
                 const remoteTotal = new Decimal(
-                  String(row.total_price_ves ?? "0").trim().replace(/,/g, "") || "0"
+                  String(candidateTotal).trim().replace(/,/g, "") || "0"
                 );
                 if (remoteTotal.gt(0)) return remoteTotal.toFixed();
               } catch {
-                // Fallback a localMatch si existe
+                // fallback a cálculo exacto amount * unitPrice
               }
-              return localMatch?.totalPriceVes || "0";
+              try {
+                const calcTotal = new Decimal(
+                  amountStr.trim().replace(/,/g, "") || "0"
+                ).mul(
+                  new Decimal(unitPriceStr.trim().replace(/,/g, "") || "0")
+                );
+                if (calcTotal.gt(0)) {
+                  return calcTotal.toFixed(2, Decimal.ROUND_HALF_UP);
+                }
+              } catch {
+                // ignore
+              }
+              return "0";
             })(),
-            costBasisRateVes: String(row.cost_basis_rate_ves ?? "0"),
+            costBasisRateVes: unpacked.costBasisRateVes,
           };
         });
 
@@ -470,15 +681,30 @@ export class SupabaseVaultRepository {
         commission_usdt: o.commissionUsdt,
         unit_price_ves: o.unitPriceVes,
         total_price_ves: o.totalPriceVes,
-        cost_basis_rate_ves: o.costBasisRateVes,
+        cost_basis_rate_ves: packOrderV2Metadata(o),
         create_time_ms: o.createTimeMs,
+        created_at:
+          o.createTimeMs > 0
+            ? new Date(o.createTimeMs).toISOString()
+            : new Date().toISOString(),
       }));
 
       for (let i = 0; i < fullPayload.length; i += 50) {
         const chunk = fullPayload.slice(i, i + 50);
-        const { error } = await supabase.from("p2p_orders").upsert(chunk);
-        if (error) {
-          // Fallback compatible si la migración SQL de columnas nuevas aún no se ejecuta
+        let needLegacyFallback = p2pOrdersHasV2Columns === false;
+
+        if (!needLegacyFallback) {
+          const { error } = await supabase.from("p2p_orders").upsert(chunk);
+          if (error) {
+            p2pOrdersHasV2Columns = false;
+            needLegacyFallback = true;
+          } else {
+            p2pOrdersHasV2Columns = true;
+          }
+        }
+
+        if (needLegacyFallback) {
+          // Empaqueta el 100% de los metadatos v2 en cost_basis_rate_ves y created_at
           const legacyChunk = chunk.map((c) => ({
             order_number: c.order_number,
             user_id: c.user_id,
@@ -491,6 +717,7 @@ export class SupabaseVaultRepository {
             commission_usdt: c.commission_usdt,
             unit_price_ves: c.unit_price_ves,
             cost_basis_rate_ves: c.cost_basis_rate_ves,
+            created_at: c.created_at,
           }));
           await supabase.from("p2p_orders").upsert(legacyChunk);
         }
@@ -570,6 +797,98 @@ export class SupabaseVaultRepository {
     return "BRONZE";
   }
 
+  private static async readFallbackBadgeTaxFromSupabase(
+    userId: string
+  ): Promise<{
+    readonly badge?: MerchantBadgeType;
+    readonly seniatTaxPercent?: number;
+  }> {
+    try {
+      const [credRes, userRes] = await Promise.all([
+        supabase
+          .from("api_credentials")
+          .select("api_secret_encrypted")
+          .eq("user_id", userId)
+          .maybeSingle(),
+        supabase
+          .from("p2p_users")
+          .select("totp_secret")
+          .eq("id", userId)
+          .maybeSingle(),
+      ]);
+
+      if (!credRes.error && credRes.data?.api_secret_encrypted) {
+        const fromCred = unpackBadgeTaxMeta(credRes.data.api_secret_encrypted);
+        if (fromCred.badge) return fromCred;
+      }
+
+      if (!userRes.error && userRes.data?.totp_secret) {
+        const fromUser = unpackBadgeTaxMeta(userRes.data.totp_secret);
+        if (fromUser.badge) return fromUser;
+      }
+    } catch {
+      // ignore
+    }
+    return {};
+  }
+
+  private static async writeFallbackBadgeTaxToSupabase(
+    userId: string,
+    badge: MerchantBadgeType,
+    seniatTaxPercent: number
+  ): Promise<void> {
+    try {
+      const [credRes, userRes] = await Promise.all([
+        supabase
+          .from("api_credentials")
+          .select("api_secret_encrypted")
+          .eq("user_id", userId)
+          .maybeSingle(),
+        supabase
+          .from("p2p_users")
+          .select("totp_secret")
+          .eq("id", userId)
+          .maybeSingle(),
+      ]);
+
+      const updates: Array<PromiseLike<unknown>> = [];
+
+      if (!credRes.error && credRes.data) {
+        const packedCred = packBadgeTaxMeta(
+          String(credRes.data.api_secret_encrypted ?? "enc:aes256:server-only"),
+          badge,
+          seniatTaxPercent
+        );
+        updates.push(
+          supabase
+            .from("api_credentials")
+            .update({ api_secret_encrypted: packedCred })
+            .eq("user_id", userId)
+        );
+      }
+
+      if (!userRes.error && userRes.data) {
+        const packedTotp = packBadgeTaxMeta(
+          String(userRes.data.totp_secret ?? "JBSWY3DPEHPK3PXP"),
+          badge,
+          seniatTaxPercent
+        );
+        updates.push(
+          supabase
+            .from("p2p_users")
+            .update({ totp_secret: packedTotp })
+            .eq("id", userId)
+        );
+      }
+
+      if (updates.length > 0) {
+        await Promise.all(updates);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   /**
    * Obtiene la insignia de comerciante verificado persistente (Bronce/Plata/Oro) del usuario.
    */
@@ -602,10 +921,13 @@ export class SupabaseVaultRepository {
         };
       }
     } catch {
-      // Fallback a bóveda local
+      // Fallback
     }
 
-    const badge = this.resolveBadgeType(localFound?.merchantBadge);
+    const remoteFallback = await this.readFallbackBadgeTaxFromSupabase(userId);
+    const badge = this.resolveBadgeType(
+      remoteFallback.badge ?? localFound?.merchantBadge
+    );
     const meta = MERCHANT_BADGE_META[badge];
     return {
       badge: meta.id,
@@ -648,8 +970,14 @@ export class SupabaseVaultRepository {
         });
       }
     } catch {
-      // Fallback a bóveda local
+      // Fallback
     }
+
+    await this.writeFallbackBadgeTaxToSupabase(
+      userId,
+      meta.id,
+      existing.seniatTaxPercent
+    );
 
     const db = readLocalDb();
     if (!db.taxConfigs) {
@@ -719,12 +1047,17 @@ export class SupabaseVaultRepository {
       // Fallback
     }
 
-    if (localFound) {
-      const badge = this.resolveBadgeType(localFound.merchantBadge);
+    const remoteFallback = await this.readFallbackBadgeTaxFromSupabase(userId);
+    if (remoteFallback.badge || localFound) {
+      const badge = this.resolveBadgeType(
+        remoteFallback.badge ?? localFound?.merchantBadge
+      );
       const badgeMeta = MERCHANT_BADGE_META[badge];
+      const taxPercent =
+        remoteFallback.seniatTaxPercent ?? localFound?.seniatTaxPercent ?? 16;
       return {
-        seniatTaxPercent: localFound.seniatTaxPercent,
-        makerFeePercent: localFound.makerFeePercent,
+        seniatTaxPercent: taxPercent,
+        makerFeePercent: badgeMeta.feePercent,
         merchantBadge: badge,
         badgeFeePercent: badgeMeta.feePercent,
       };
@@ -746,9 +1079,8 @@ export class SupabaseVaultRepository {
     config: { seniatTaxPercent: number; makerFeePercent: number }
   ): Promise<void> {
     const updatedAt = new Date().toISOString();
-    const db = readLocalDb();
-    const prev = db.taxConfigs?.find((t) => t.userId === userId);
-    const badge = this.resolveBadgeType(prev?.merchantBadge);
+    const existing = await this.getUserTaxConfig(userId);
+    const badge = this.resolveBadgeType(existing.merchantBadge);
     const badgeMeta = MERCHANT_BADGE_META[badge];
 
     try {
@@ -772,6 +1104,13 @@ export class SupabaseVaultRepository {
       // Fallback
     }
 
+    await this.writeFallbackBadgeTaxToSupabase(
+      userId,
+      badge,
+      config.seniatTaxPercent
+    );
+
+    const db = readLocalDb();
     if (!db.taxConfigs) {
       db.taxConfigs = [];
     }
