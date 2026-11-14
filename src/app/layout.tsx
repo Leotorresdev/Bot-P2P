@@ -39,11 +39,11 @@ export default function RootLayout({
     <html
       lang="es-VE"
       suppressHydrationWarning
-      className={`${jakarta.variable} ${mono.variable}`}
+      className={`dark ${jakarta.variable} ${mono.variable}`}
     >
       <body
         suppressHydrationWarning
-        className="min-h-screen bg-alpine-snow font-sans text-alpine-ink"
+        className="min-h-screen bg-alpine-snow font-sans text-alpine-ink dark:bg-[#0B0E11] dark:text-[#EAECEF]"
       >
         <QueryProvider>{children}</QueryProvider>
       </body>

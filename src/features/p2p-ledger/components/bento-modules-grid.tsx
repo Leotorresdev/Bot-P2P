@@ -50,6 +50,7 @@ interface BentoModulesGridProps {
   readonly selectedBank: string | null;
   readonly onSelectBank: (bank: string | null) => void;
   readonly onOpenFullLedger: () => void;
+  readonly hideLiveMarketSection?: boolean;
 }
 
 const BADGE_ORDER: readonly MerchantBadgeType[] = ["BRONZE", "SILVER", "GOLD"];
@@ -60,21 +61,21 @@ const BADGE_STYLES: Record<
 > = {
   BRONZE: {
     active:
-      "border-amber-600 bg-amber-950 text-amber-100 shadow-xs ring-1 ring-amber-400/50",
+      "border-amber-600 bg-amber-950 text-amber-100 shadow-xs ring-1 ring-amber-400/50 dark:border-[#F0B90B] dark:bg-[#F0B90B]/20 dark:text-[#FCD535]",
     inactive:
-      "border-slate-200 bg-white text-slate-700 hover:border-amber-300 hover:bg-amber-50/70",
+      "border-slate-200 bg-white text-slate-700 hover:border-amber-300 hover:bg-amber-50/70 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#848E9C] dark:hover:border-[#F0B90B]/50 dark:hover:text-[#EAECEF]",
   },
   SILVER: {
     active:
-      "border-slate-700 bg-slate-800 text-white shadow-xs ring-1 ring-slate-400/50",
+      "border-slate-700 bg-slate-800 text-white shadow-xs ring-1 ring-slate-400/50 dark:border-[#EAECEF]/60 dark:bg-[#EAECEF]/15 dark:text-[#EAECEF]",
     inactive:
-      "border-slate-200 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50",
+      "border-slate-200 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#848E9C] dark:hover:border-[#848E9C] dark:hover:text-[#EAECEF]",
   },
   GOLD: {
     active:
-      "border-yellow-500 bg-yellow-500 text-slate-950 shadow-xs ring-1 ring-yellow-300",
+      "border-yellow-500 bg-yellow-500 text-slate-950 shadow-xs ring-1 ring-yellow-300 dark:border-[#FCD535] dark:bg-[#FCD535] dark:text-[#0B0E11]",
     inactive:
-      "border-slate-200 bg-white text-slate-700 hover:border-yellow-400 hover:bg-yellow-50/70",
+      "border-slate-200 bg-white text-slate-700 hover:border-yellow-400 hover:bg-yellow-50/70 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#848E9C] dark:hover:border-[#FCD535]/60 dark:hover:text-[#EAECEF]",
   },
 };
 
@@ -201,6 +202,7 @@ export function BentoModulesGrid({
   selectedBank,
   onSelectBank,
   onOpenFullLedger,
+  hideLiveMarketSection = false,
 }: BentoModulesGridProps) {
   const { setClosingExportModalOpen } = useLedgerUiStore();
 
@@ -251,11 +253,11 @@ export function BentoModulesGrid({
       {/* ================================================================= */}
       {/* BARRA SUPERIOR PERSISTENTE: INSIGNIA + PERÍODO + PROMEDIO + CIERRE */}
       {/* ================================================================= */}
-      <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-2xl border border-slate-200/90 bg-white px-3.5 py-2.5 shadow-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-2xl border border-slate-200/90 bg-white px-3.5 py-2.5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20]">
         {/* Selector Persistente de Insignia de Comerciante Verificado */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
-            <Award className="h-4 w-4 text-amber-500" />
+          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700 dark:text-[#EAECEF]">
+            <Award className="h-4 w-4 text-amber-500 dark:text-[#FCD535]" />
             <span className="hidden sm:inline">Insignia Verificada:</span>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
@@ -279,10 +281,10 @@ export function BentoModulesGrid({
                   <span>{meta.label}</span>
                   <span
                     className={cn(
-                      "rounded-md px-1.5 py-0.5 font-mono text-[10px]",
+                      "rounded-md px-1.5 py-0.5 font-mono text-[10px] tabular-nums",
                       isSelected
-                        ? "bg-white/20 text-current"
-                        : "bg-slate-100 text-slate-600"
+                        ? "bg-white/20 text-current dark:bg-black/20"
+                        : "bg-slate-100 text-slate-600 dark:bg-[#0B0E11] dark:text-[#848E9C]"
                     )}
                   >
                     {meta.feeLabel}
@@ -292,7 +294,7 @@ export function BentoModulesGrid({
             })}
           </div>
           {badgeFeedback && (
-            <span className="text-[11px] font-semibold text-rose-600">
+            <span className="text-[11px] font-semibold text-rose-600 dark:text-[#F6465D]">
               {badgeFeedback}
             </span>
           )}
@@ -301,7 +303,7 @@ export function BentoModulesGrid({
         {/* Selector de Período KPI, Promedio y Modal de Cierre */}
         <div className="flex flex-wrap items-center gap-2">
           {/* Chips de Período */}
-          <div className="inline-flex items-center rounded-xl border border-slate-200 bg-slate-50 p-0.5">
+          <div className="inline-flex items-center rounded-xl border border-slate-200 bg-slate-50 p-0.5 dark:border-[#2B3139] dark:bg-[#0B0E11]">
             {(
               [
                 { id: "TODAY", label: "Hoy" },
@@ -317,8 +319,8 @@ export function BentoModulesGrid({
                 className={cn(
                   "rounded-lg px-2.5 py-1 text-[11px] font-bold transition-all",
                   period === item.id
-                    ? "bg-slate-900 text-white shadow-xs"
-                    : "text-slate-600 hover:text-slate-900"
+                    ? "bg-slate-900 text-white shadow-xs dark:bg-[#FCD535] dark:text-[#0B0E11]"
+                    : "text-slate-600 hover:text-slate-900 dark:text-[#848E9C] dark:hover:text-[#EAECEF]"
                 )}
               >
                 {item.label}
@@ -331,7 +333,7 @@ export function BentoModulesGrid({
               type="date"
               value={selectedDate}
               onChange={(e) => onSelectedDateChange(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1 font-mono text-[11px] font-bold text-slate-800 focus:border-emerald-500 focus:bg-white focus:outline-none"
+              className="rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1 font-mono text-[11px] font-bold text-slate-800 focus:border-emerald-500 focus:bg-white focus:outline-none dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:focus:border-[#FCD535]"
               title="Seleccionar día calendario (VET)"
             />
           )}
@@ -341,7 +343,7 @@ export function BentoModulesGrid({
               type="month"
               value={selectedMonth}
               onChange={(e) => onSelectedMonthChange(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1 font-mono text-[11px] font-bold text-slate-800 focus:border-emerald-500 focus:bg-white focus:outline-none"
+              className="rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1 font-mono text-[11px] font-bold text-slate-800 focus:border-emerald-500 focus:bg-white focus:outline-none dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:focus:border-[#FCD535]"
               title="Seleccionar mes calendario (VET)"
             />
           )}
@@ -350,7 +352,7 @@ export function BentoModulesGrid({
           <button
             type="button"
             onClick={() => setClosingExportModalOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow-xs transition-all hover:bg-emerald-700 active:scale-[0.98]"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow-xs transition-all hover:bg-emerald-700 active:scale-[0.98] dark:bg-[#FCD535] dark:text-[#0B0E11] dark:hover:bg-[#F0B90B]"
           >
             <FileSpreadsheet className="h-3.5 w-3.5" />
             <span>Cierre Día / Mes</span>
@@ -365,22 +367,22 @@ export function BentoModulesGrid({
         {/* KPI 1: Ganancia Neta Final */}
         <div
           className={cn(
-            "relative overflow-hidden rounded-2xl border p-3.5 shadow-xs transition-all",
+            "relative overflow-hidden rounded-2xl border p-3.5 shadow-xs transition-all dark:bg-[#181A20]",
             netPositive
-              ? "border-emerald-200/90 bg-gradient-to-br from-emerald-50/90 via-white to-white"
-              : "border-rose-200/90 bg-gradient-to-br from-rose-50/90 via-white to-white"
+              ? "border-emerald-200/90 bg-gradient-to-br from-emerald-50/90 via-white to-white dark:border-[#0ECB81]/30 dark:from-[#0ECB81]/10 dark:via-[#181A20] dark:to-[#181A20]"
+              : "border-rose-200/90 bg-gradient-to-br from-rose-50/90 via-white to-white dark:border-[#F6465D]/30 dark:from-[#F6465D]/10 dark:via-[#181A20] dark:to-[#181A20]"
           )}
         >
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-[#848E9C]">
               Ganancia Neta Final
             </span>
             <span
               className={cn(
                 "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold",
                 netPositive
-                  ? "bg-emerald-100 text-emerald-800"
-                  : "bg-rose-100 text-rose-800"
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-[#0ECB81]/15 dark:text-[#0ECB81]"
+                  : "bg-rose-100 text-rose-800 dark:bg-[#F6465D]/15 dark:text-[#F6465D]"
               )}
             >
               {netPositive ? (
@@ -394,8 +396,10 @@ export function BentoModulesGrid({
           <div className="mt-1.5 flex items-baseline gap-2">
             <span
               className={cn(
-                "font-mono text-xl font-extrabold tracking-tight sm:text-2xl",
-                netPositive ? "text-emerald-700" : "text-rose-700"
+                "font-mono text-xl font-extrabold tracking-tight tabular-nums sm:text-2xl",
+                netPositive
+                  ? "text-emerald-700 dark:text-[#0ECB81]"
+                  : "text-rose-700 dark:text-[#F6465D]"
               )}
             >
               {summary
@@ -403,23 +407,25 @@ export function BentoModulesGrid({
                 : "0.00 USDT"}
             </span>
           </div>
-          <div className="mt-0.5 flex items-center justify-between text-xs font-semibold text-slate-600">
-            <span className="font-mono">
+          <div className="mt-0.5 flex items-center justify-between text-xs font-semibold text-slate-600 dark:text-[#848E9C]">
+            <span className="font-mono tabular-nums dark:text-[#EAECEF]">
               {summary
                 ? `${netPositive ? "+" : ""}${formatVesAmount(summary.netProfitVes)}`
                 : "0.00 Bs."}
             </span>
-            <span className="text-[10px] text-slate-400">Bruta - Insignia</span>
+            <span className="text-[10px] text-slate-400 dark:text-[#848E9C]">
+              Bruta - Insignia
+            </span>
           </div>
         </div>
 
         {/* KPI 2: Ganancia Bruta & Volumen de la Vuelta */}
-        <div className="rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs">
+        <div className="rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20]">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-[#848E9C]">
               Ganancia Bruta (Vuelta)
             </span>
-            <span className="rounded-full bg-indigo-50 px-2 py-0.5 font-mono text-[10px] font-bold text-indigo-700">
+            <span className="rounded-full bg-indigo-50 px-2 py-0.5 font-mono text-[10px] font-bold tabular-nums text-indigo-700 dark:bg-[#FCD535]/15 dark:text-[#FCD535]">
               Vuelta:{" "}
               {summary
                 ? formatDecimalWithCommas(summary.vueltaVolumeUsdt)
@@ -428,30 +434,30 @@ export function BentoModulesGrid({
             </span>
           </div>
           <div className="mt-1.5 flex items-baseline justify-between gap-2">
-            <span className="font-mono text-xl font-extrabold tracking-tight text-slate-900">
+            <span className="font-mono text-xl font-extrabold tracking-tight tabular-nums text-slate-900 dark:text-[#EAECEF]">
               {summary ? formatVesAmount(summary.grossProfitVes) : "0.00 Bs."}
             </span>
           </div>
           <div className="mt-0.5 flex flex-wrap items-center justify-between gap-1 text-xs">
-            <span className="font-mono font-semibold text-slate-600">
+            <span className="font-mono font-semibold tabular-nums text-slate-600 dark:text-[#848E9C]">
               Eq:{" "}
               {summary
                 ? formatUsdtAmount(summary.grossProfitUsdt)
                 : "0.00 USDT"}
             </span>
             {summary?.pendingDirection === "BUY_BACK" && (
-              <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+              <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-[#FCD535]/15 dark:text-[#FCD535]">
                 Por recomprar: {formatDecimalWithCommas(summary.pendingUsdt)}{" "}
                 USDT
               </span>
             )}
             {summary?.pendingDirection === "SELL_OUT" && (
-              <span className="rounded-md bg-sky-50 px-1.5 py-0.5 text-[10px] font-bold text-sky-800">
+              <span className="rounded-md bg-sky-50 px-1.5 py-0.5 text-[10px] font-bold text-sky-800 dark:bg-sky-500/15 dark:text-sky-400">
                 Por vender: {formatDecimalWithCommas(summary.pendingUsdt)} USDT
               </span>
             )}
             {(!summary || summary.pendingDirection === "NONE") && (
-              <span className="inline-flex items-center gap-0.5 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
+              <span className="inline-flex items-center gap-0.5 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-[#0ECB81]/15 dark:text-[#0ECB81]">
                 <CheckCircle2 className="h-2.5 w-2.5" />
                 Ciclo 100%
               </span>
@@ -460,17 +466,17 @@ export function BentoModulesGrid({
         </div>
 
         {/* KPI 3: Precio Promedio Venta vs Compra & Brecha de Puntos */}
-        <div className="rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs">
+        <div className="rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20]">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
-              Promedios & Brecha
+            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-[#848E9C]">
+              Promedios &amp; Brecha
             </span>
             <span
               className={cn(
-                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[11px] font-extrabold",
+                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[11px] font-extrabold tabular-nums",
                 brechaPositive
-                  ? "bg-emerald-100 text-emerald-800"
-                  : "bg-rose-100 text-rose-800"
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-[#0ECB81]/15 dark:text-[#0ECB81]"
+                  : "bg-rose-100 text-rose-800 dark:bg-[#F6465D]/15 dark:text-[#F6465D]"
               )}
             >
               <Scale className="h-3 w-3" />
@@ -480,20 +486,22 @@ export function BentoModulesGrid({
             </span>
           </div>
           <div className="mt-1.5 grid grid-cols-2 gap-2">
-            <div className="rounded-xl bg-rose-50/70 px-2 py-1">
-              <p className="text-[10px] font-bold text-rose-700">Prom. Venta</p>
-              <p className="font-mono text-xs font-extrabold text-slate-900">
+            <div className="rounded-xl bg-rose-50/70 px-2 py-1 dark:bg-[#F6465D]/10">
+              <p className="text-[10px] font-bold text-rose-700 dark:text-[#F6465D]">
+                Prom. Venta
+              </p>
+              <p className="font-mono text-xs font-extrabold tabular-nums text-slate-900 dark:text-[#EAECEF]">
                 {summary
                   ? formatDecimalWithCommas(summary.activeAvgSellRateVes)
                   : "0.00"}{" "}
                 Bs
               </p>
             </div>
-            <div className="rounded-xl bg-emerald-50/70 px-2 py-1">
-              <p className="text-[10px] font-bold text-emerald-700">
+            <div className="rounded-xl bg-emerald-50/70 px-2 py-1 dark:bg-[#0ECB81]/10">
+              <p className="text-[10px] font-bold text-emerald-700 dark:text-[#0ECB81]">
                 Prom. Compra
               </p>
-              <p className="font-mono text-xs font-extrabold text-slate-900">
+              <p className="font-mono text-xs font-extrabold tabular-nums text-slate-900 dark:text-[#EAECEF]">
                 {summary
                   ? formatDecimalWithCommas(summary.activeAvgBuyRateVes)
                   : "0.00"}{" "}
@@ -501,100 +509,102 @@ export function BentoModulesGrid({
               </p>
             </div>
           </div>
-          <p className="mt-1 text-[10px] text-slate-400">
+          <p className="mt-1 text-[10px] text-slate-400 dark:text-[#848E9C]">
             Cálculo:{" "}
-            <strong className="text-slate-600">
+            <strong className="text-slate-600 dark:text-[#EAECEF]">
               Ponderado (Σ Bs ÷ Σ USDT)
             </strong>
           </p>
         </div>
 
         {/* KPI 4: Comisión por Volumen (Insignia Bronce / Plata / Oro) */}
-        <div className="rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs">
+        <div className="rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20]">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-[#848E9C]">
               Comisión {activeBadgeMeta.emoji} {activeBadgeMeta.label}
             </span>
-            <span className="rounded-full bg-amber-50 px-2 py-0.5 font-mono text-[10px] font-bold text-amber-800">
+            <span className="rounded-full bg-amber-50 px-2 py-0.5 font-mono text-[10px] font-bold tabular-nums text-amber-800 dark:bg-[#FCD535]/15 dark:text-[#FCD535]">
               {activeBadgeMeta.feeLabel} / vol
             </span>
           </div>
           <div className="mt-1.5 flex items-baseline gap-2">
-            <span className="font-mono text-xl font-extrabold tracking-tight text-amber-700">
+            <span className="font-mono text-xl font-extrabold tracking-tight tabular-nums text-amber-700 dark:text-[#FCD535]">
               -
               {summary
                 ? formatUsdtAmount(summary.volumeCommissionUsdt)
                 : "0.00 USDT"}
             </span>
           </div>
-          <div className="mt-0.5 flex items-center justify-between text-xs font-semibold text-slate-600">
-            <span className="font-mono">
+          <div className="mt-0.5 flex items-center justify-between text-xs font-semibold text-slate-600 dark:text-[#848E9C]">
+            <span className="font-mono tabular-nums dark:text-[#EAECEF]">
               -
               {summary
                 ? formatVesAmount(summary.volumeCommissionVes)
                 : "0.00 Bs."}
             </span>
-            <span className="text-[10px] text-slate-400">Solo COMPLETED</span>
+            <span className="text-[10px] text-slate-400 dark:text-[#848E9C]">
+              Solo COMPLETED
+            </span>
           </div>
         </div>
 
         {/* KPI 5: Total Vendidos (VENTA - Rojo Binance) */}
-        <div className="rounded-2xl border border-slate-200/90 bg-white px-3.5 py-2.5 shadow-xs">
+        <div className="rounded-2xl border border-slate-200/90 bg-white px-3.5 py-2.5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20]">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-500">
+            <span className="text-[11px] font-bold text-slate-500 dark:text-[#848E9C]">
               Total Vendidos (VENTA)
             </span>
-            <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">
+            <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-rose-700 dark:bg-[#F6465D]/15 dark:text-[#F6465D]">
               {summary?.completedSellCount ?? 0} comp.
             </span>
           </div>
-          <p className="mt-1 font-mono text-base font-extrabold text-rose-700">
+          <p className="mt-1 font-mono text-base font-extrabold tabular-nums text-rose-700 dark:text-[#F6465D]">
             {summary ? formatUsdtAmount(summary.totalSoldUsdt) : "0.00 USDT"}
           </p>
-          <p className="font-mono text-xs font-semibold text-slate-600">
+          <p className="font-mono text-xs font-semibold tabular-nums text-slate-600 dark:text-[#848E9C]">
             {summary ? formatVesAmount(summary.totalSoldVes) : "0.00 Bs."}
           </p>
         </div>
 
         {/* KPI 6: Total Comprados (COMPRA - Verde Binance) */}
-        <div className="rounded-2xl border border-slate-200/90 bg-white px-3.5 py-2.5 shadow-xs">
+        <div className="rounded-2xl border border-slate-200/90 bg-white px-3.5 py-2.5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20]">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-500">
+            <span className="text-[11px] font-bold text-slate-500 dark:text-[#848E9C]">
               Total Comprados (COMPRA)
             </span>
-            <span className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
+            <span className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-emerald-700 dark:bg-[#0ECB81]/15 dark:text-[#0ECB81]">
               {summary?.completedBuyCount ?? 0} comp.
             </span>
           </div>
-          <p className="mt-1 font-mono text-base font-extrabold text-emerald-700">
+          <p className="mt-1 font-mono text-base font-extrabold tabular-nums text-emerald-700 dark:text-[#0ECB81]">
             {summary ? formatUsdtAmount(summary.totalBoughtUsdt) : "0.00 USDT"}
           </p>
-          <p className="font-mono text-xs font-semibold text-slate-600">
+          <p className="font-mono text-xs font-semibold tabular-nums text-slate-600 dark:text-[#848E9C]">
             {summary ? formatVesAmount(summary.totalBoughtVes) : "0.00 Bs."}
           </p>
         </div>
 
         {/* KPI 7: Volumen Total Movido (Compra + Venta) */}
-        <div className="rounded-2xl border border-slate-200/90 bg-white px-3.5 py-2.5 shadow-xs">
+        <div className="rounded-2xl border border-slate-200/90 bg-white px-3.5 py-2.5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20]">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-500">
+            <span className="text-[11px] font-bold text-slate-500 dark:text-[#848E9C]">
               Volumen Total Movido
             </span>
-            <ArrowDownUp className="h-3.5 w-3.5 text-indigo-600" />
+            <ArrowDownUp className="h-3.5 w-3.5 text-indigo-600 dark:text-[#FCD535]" />
           </div>
-          <p className="mt-1 font-mono text-base font-extrabold text-slate-900">
+          <p className="mt-1 font-mono text-base font-extrabold tabular-nums text-slate-900 dark:text-[#EAECEF]">
             {summary ? formatUsdtAmount(summary.totalVolumeUsdt) : "0.00 USDT"}
           </p>
-          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-slate-500">
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-slate-500 dark:text-[#848E9C]">
             <span>{summary?.totalOrdersInPeriod ?? 0} totales</span>
             <span>·</span>
-            <span className="text-slate-600">
+            <span className="text-slate-600 dark:text-[#EAECEF]">
               {summary?.cancelledCount ?? 0} canc
             </span>
             {(summary?.appealCount ?? 0) > 0 && (
               <>
                 <span>·</span>
-                <span className="font-bold text-amber-700">
+                <span className="font-bold text-amber-700 dark:text-[#FCD535]">
                   {summary?.appealCount} apel
                 </span>
               </>
@@ -603,17 +613,17 @@ export function BentoModulesGrid({
         </div>
 
         {/* KPI 8: Período Activo y Corte VET */}
-        <div className="flex flex-col justify-between rounded-2xl border border-slate-200/90 bg-white px-3.5 py-2.5 shadow-xs">
+        <div className="flex flex-col justify-between rounded-2xl border border-slate-200/90 bg-white px-3.5 py-2.5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20]">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-500">
-              Período & Corte VET
+            <span className="text-[11px] font-bold text-slate-500 dark:text-[#848E9C]">
+              Período &amp; Corte VET
             </span>
-            <CalendarDays className="h-3.5 w-3.5 text-emerald-600" />
+            <CalendarDays className="h-3.5 w-3.5 text-emerald-600 dark:text-[#0ECB81]" />
           </div>
-          <p className="mt-1 truncate text-sm font-extrabold text-slate-900">
+          <p className="mt-1 truncate text-sm font-extrabold text-slate-900 dark:text-[#EAECEF]">
             {summary?.periodLabel ?? "Cargando..."}
           </p>
-          <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500">
+          <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500 dark:text-[#848E9C]">
             <span className="inline-flex items-center gap-1">
               <Clock className="h-3 w-3" />
               Cierre {summary?.nextClosingTimeVet ?? "23:59 VET"}
@@ -621,7 +631,7 @@ export function BentoModulesGrid({
             <button
               type="button"
               onClick={() => setClosingExportModalOpen(true)}
-              className="font-bold text-emerald-700 underline-offset-2 hover:underline"
+              className="font-bold text-emerald-700 underline-offset-2 hover:underline dark:text-[#FCD535]"
             >
               Exportar
             </button>
@@ -632,7 +642,13 @@ export function BentoModulesGrid({
       {/* ================================================================= */}
       {/* ZONA CENTRAL: GRÁFICA LIVE TRADINGVIEW + MONITOR 7 BANCOS + ESPEJO */}
       {/* ================================================================= */}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
+      {hideLiveMarketSection ? (
+        <CompactOperationsPanel
+          summary={summary}
+          onOpenFullLedger={onOpenFullLedger}
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
         {/* Columna Izquierda (7/12): Gráfica 1H VET + Monitor en Vivo 7 Bancos */}
         <div className="flex flex-col gap-3 lg:col-span-7">
           <TradingViewP2PChart
@@ -874,23 +890,28 @@ export function BentoModulesGrid({
           />
         </div>
       </div>
+      )}
 
       {/* Pie informativo compacto */}
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/70 bg-white/70 px-3.5 py-2 text-[11px] text-slate-500">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/70 bg-white/70 px-3.5 py-2 text-[11px] text-slate-500 dark:border-[#2B3139] dark:bg-[#181A20] dark:text-[#848E9C]">
         <div className="flex items-center gap-2">
-          <Activity className="h-3.5 w-3.5 text-emerald-600" />
+          <Activity className="h-3.5 w-3.5 text-emerald-600 dark:text-[#0ECB81]" />
           <span>
-            Motor de Vuelta & Brecha activo · Comisión Insignia{" "}
-            <strong className="text-slate-700">
+            Motor de Vuelta &amp; Brecha activo · Comisión Insignia{" "}
+            <strong className="text-slate-700 dark:text-[#EAECEF]">
               {activeBadgeMeta.emoji} {activeBadgeMeta.label} ({activeBadgeMeta.feeLabel})
             </strong>{" "}
-            aplicada únicamente al volumen con estado <code className="font-mono font-bold text-emerald-700">COMPLETED</code>.
+            aplicada únicamente al volumen con estado{" "}
+            <code className="font-mono font-bold text-emerald-700 dark:text-[#0ECB81]">
+              COMPLETED
+            </code>
+            .
           </span>
         </div>
         <button
           type="button"
           onClick={onOpenFullLedger}
-          className="inline-flex items-center gap-1 font-bold text-slate-700 hover:text-emerald-700"
+          className="inline-flex items-center gap-1 font-bold text-slate-700 hover:text-emerald-700 dark:text-[#FCD535] dark:hover:text-[#F0B90B]"
         >
           <BarChart3 className="h-3.5 w-3.5" />
           <span>Abrir Espejo Completo Binance P2P</span>

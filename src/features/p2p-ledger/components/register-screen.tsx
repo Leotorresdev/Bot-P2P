@@ -66,7 +66,7 @@ export function RegisterScreen() {
       }
 
       setActiveRole("OPERATOR");
-      setActiveTab("DASHBOARD_LIVE");
+      setActiveTab("MARKET_LIVE");
       setTotpSetupKey(json.data?.totpSecret ?? null);
       setIsSubmitting(false);
     } catch (error) {

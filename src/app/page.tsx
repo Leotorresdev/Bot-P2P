@@ -5,7 +5,7 @@ export default function HomePage() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-screen items-center justify-center bg-alpine-snow font-mono text-sm text-alpine-muted">
+        <div className="flex min-h-screen items-center justify-center bg-alpine-snow font-mono text-sm text-alpine-muted dark:bg-[#0B0E11] dark:text-[#848E9C]">
           Sincronizando Bóveda Contable P2P...
         </div>
       }

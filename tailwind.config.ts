@@ -25,6 +25,18 @@ const config: Config = {
           amberSoft: "#FFFBEB",
           amberBorder: "#FDE68A",
         },
+        binance: {
+          bg: "#0B0E11",
+          surface: "#181A20",
+          elevated: "#1E2329",
+          border: "#2B3139",
+          gold: "#FCD535",
+          goldHover: "#F0B90B",
+          text: "#EAECEF",
+          muted: "#848E9C",
+          green: "#0ECB81",
+          red: "#F6465D",
+        },
       },
       fontFamily: {
         sans: [

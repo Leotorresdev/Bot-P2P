@@ -98,7 +98,7 @@ export function LoginVaultScreen() {
         return;
       }
       setActiveRole("OPERATOR");
-      setActiveTab("DASHBOARD_LIVE");
+      setActiveTab("MARKET_LIVE");
       router.refresh();
       router.push("/");
     } catch {

@@ -2,6 +2,22 @@
 
 import * as React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useThemeStore } from "@/features/p2p-ledger/store/use-theme-store";
+
+function ThemeSynchronizer() {
+  const theme = useThemeStore((state) => state.theme);
+
+  React.useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "dark") {
+      root.classList.add("dark");
+    } else {
+      root.classList.remove("dark");
+    }
+  }, [theme]);
+
+  return null;
+}
 
 export function QueryProvider({
   children,
@@ -22,6 +38,9 @@ export function QueryProvider({
   );
 
   return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <ThemeSynchronizer />
+      {children}
+    </QueryClientProvider>
   );
 }

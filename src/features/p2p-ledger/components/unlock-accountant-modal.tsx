@@ -75,11 +75,11 @@ export function UnlockAccountantModal() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm animate-in fade-in duration-150 dark:bg-black/75"
       onClick={handleClose}
     >
       <div
-        className="relative flex w-full max-w-[440px] flex-col gap-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl"
+        className="relative flex w-full max-w-[440px] flex-col gap-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-[#2B3139] dark:bg-[#181A20]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Botón Cerrar */}
@@ -87,7 +87,7 @@ export function UnlockAccountantModal() {
           type="button"
           onClick={handleClose}
           aria-label="Cerrar ventana"
-          className="absolute right-4 top-4 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+          className="absolute right-4 top-4 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-[#848E9C] dark:hover:bg-[#1E2329] dark:hover:text-[#EAECEF]"
         >
           <X className="h-4 w-4" />
         </button>
@@ -101,11 +101,11 @@ export function UnlockAccountantModal() {
           />
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2">
-              <h3 className="font-display text-lg font-extrabold text-slate-900">
+              <h3 className="font-display text-lg font-extrabold text-slate-900 dark:text-[#EAECEF]">
                 Activar Modo Contador
               </h3>
             </div>
-            <p className="text-xs leading-relaxed text-slate-500">
+            <p className="text-xs leading-relaxed text-slate-500 dark:text-[#848E9C]">
               Ingresa tu contraseña para mostrar únicamente los libros de IVA
               (16%) y cierres de las 11:59 PM.
             </p>
@@ -113,12 +113,12 @@ export function UnlockAccountantModal() {
         </div>
 
         {/* Resumen de Privacidad */}
-        <div className="flex flex-col gap-2 rounded-xl border border-amber-200/80 bg-amber-50/60 p-3.5 text-xs">
-          <div className="flex items-center gap-2 font-bold text-amber-950">
-            <ShieldCheck className="h-4 w-4 shrink-0 text-amber-600" />
+        <div className="flex flex-col gap-2 rounded-xl border border-amber-200/80 bg-amber-50/60 p-3.5 text-xs dark:border-[#FCD535]/30 dark:bg-[#FCD535]/10">
+          <div className="flex items-center gap-2 font-bold text-amber-950 dark:text-[#FCD535]">
+            <ShieldCheck className="h-4 w-4 shrink-0 text-amber-600 dark:text-[#FCD535]" />
             <span>¿Qué verá tu contador en este modo?</span>
           </div>
-          <ul className="ml-6 list-disc space-y-1 text-[11px] font-medium text-amber-900">
+          <ul className="ml-6 list-disc space-y-1 text-[11px] font-medium text-amber-900 dark:text-[#EAECEF]">
             <li>Actas de cierre diario (11:59 PM) y descarga de Excel SENIAT.</li>
             <li>
               <strong>Oculto por seguridad:</strong> Tus claves API de Binance y
@@ -132,12 +132,12 @@ export function UnlockAccountantModal() {
           <div className="flex flex-col gap-1.5">
             <label
               htmlFor="unlock-accountant-password"
-              className="text-xs font-bold text-slate-800"
+              className="text-xs font-bold text-slate-800 dark:text-[#EAECEF]"
             >
               Confirma tu Contraseña de Operador
             </label>
             <div className="relative flex items-center">
-              <Lock className="pointer-events-none absolute left-3.5 h-4 w-4 text-slate-400" />
+              <Lock className="pointer-events-none absolute left-3.5 h-4 w-4 text-slate-400 dark:text-[#848E9C]" />
               <input
                 ref={inputRef}
                 id="unlock-accountant-password"
@@ -149,12 +149,12 @@ export function UnlockAccountantModal() {
                 }}
                 placeholder="••••••••••••"
                 autoComplete="current-password"
-                className="w-full rounded-xl border border-slate-300 bg-slate-50 py-2.5 pl-10 pr-10 text-sm font-medium text-slate-900 placeholder:text-slate-400 focus:border-amber-500 focus:bg-white focus:outline-none"
+                className="w-full rounded-xl border border-slate-300 bg-slate-50 py-2.5 pl-10 pr-10 text-sm font-medium text-slate-900 placeholder:text-slate-400 focus:border-amber-500 focus:bg-white focus:outline-none dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:placeholder:text-[#848E9C] dark:focus:border-[#FCD535]"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword((prev) => !prev)}
-                className="absolute right-3 text-slate-400 hover:text-slate-700"
+                className="absolute right-3 text-slate-400 hover:text-slate-700 dark:text-[#848E9C] dark:hover:text-[#EAECEF]"
               >
                 {showPassword ? (
                   <EyeOff className="h-4 w-4" />
@@ -164,7 +164,7 @@ export function UnlockAccountantModal() {
               </button>
             </div>
             {error && (
-              <span className="text-xs font-semibold text-rose-600">
+              <span className="text-xs font-semibold text-rose-600 dark:text-[#F6465D]">
                 {error}
               </span>
             )}
@@ -175,14 +175,14 @@ export function UnlockAccountantModal() {
             <button
               type="button"
               onClick={handleClose}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#848E9C] dark:hover:text-[#EAECEF]"
             >
               Cancelar
             </button>
             <button
               type="submit"
               disabled={isVerifying}
-              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 px-4 py-2.5 text-xs font-bold text-white shadow-sm shadow-amber-600/20 transition-all hover:from-amber-500 hover:to-amber-600 disabled:opacity-60"
+              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 px-4 py-2.5 text-xs font-bold text-white shadow-sm shadow-amber-600/20 transition-all hover:from-amber-500 hover:to-amber-600 disabled:opacity-60 dark:from-[#F0B90B] dark:to-[#FCD535] dark:text-[#0B0E11]"
             >
               <FileCheck2 className="h-4 w-4" />
               <span>
