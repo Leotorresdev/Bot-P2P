@@ -116,6 +116,60 @@ CREATE TABLE IF NOT EXISTS public.p2p_hourly_candles (
 CREATE INDEX IF NOT EXISTS idx_p2p_hourly_candles_bank_bucket
   ON public.p2p_hourly_candles (bank_name, hour_bucket_utc DESC);
 
+-- 6.B Estado de Jornada Activa por Operador
+CREATE TABLE IF NOT EXISTS public.p2p_active_shifts (
+  user_id TEXT PRIMARY KEY REFERENCES public.p2p_users(id) ON DELETE CASCADE,
+  shift_id TEXT NOT NULL,
+  date_iso_vet TEXT NOT NULL,
+  shift_number INTEGER NOT NULL DEFAULT 1,
+  shift_start_time_ms BIGINT NOT NULL,
+  start_time_vet_label TEXT NOT NULL,
+  merchant_badge TEXT NOT NULL DEFAULT 'BRONZE',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 6.C Historial de Cierres Parciales por Jornada (ShiftClosure)
+CREATE TABLE IF NOT EXISTS public.p2p_shift_closures (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES public.p2p_users(id) ON DELETE CASCADE,
+  date_iso_vet TEXT NOT NULL,
+  date_label_vet TEXT NOT NULL,
+  shift_number INTEGER NOT NULL,
+  shift_start_time_ms BIGINT NOT NULL,
+  shift_end_time_ms BIGINT NOT NULL,
+  start_time_vet_label TEXT NOT NULL,
+  end_time_vet_label TEXT NOT NULL,
+  closed_by TEXT NOT NULL DEFAULT 'MANUAL',
+  merchant_badge TEXT NOT NULL DEFAULT 'BRONZE',
+  badge_fee_percent TEXT NOT NULL,
+  summary_json JSONB NOT NULL,
+  orders_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_p2p_shift_closures_user_date
+  ON public.p2p_shift_closures (user_id, date_iso_vet DESC, shift_number ASC);
+
+-- 6.D Cierre Total del Día Consolidado (DailyTotalClosure - 11:59:59 PM VET)
+CREATE TABLE IF NOT EXISTS public.p2p_daily_total_closures (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES public.p2p_users(id) ON DELETE CASCADE,
+  date_iso_vet TEXT NOT NULL,
+  month_iso_vet TEXT NOT NULL,
+  date_label_vet TEXT NOT NULL,
+  executed_at_vet TEXT NOT NULL DEFAULT '23:59:59 VET',
+  shifts_count INTEGER NOT NULL DEFAULT 1,
+  merchant_badge TEXT NOT NULL DEFAULT 'BRONZE',
+  summary_json JSONB NOT NULL,
+  shifts_meta_json JSONB NOT NULL,
+  orders_json JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, date_iso_vet)
+);
+
+CREATE INDEX IF NOT EXISTS idx_p2p_daily_total_closures_user_month
+  ON public.p2p_daily_total_closures (user_id, month_iso_vet DESC, date_iso_vet ASC);
+
 -- 7. Permisos y Políticas de Acceso (RLS)
 ALTER TABLE public.p2p_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.api_credentials ENABLE ROW LEVEL SECURITY;
@@ -123,6 +177,9 @@ ALTER TABLE public.p2p_orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.daily_closings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.p2p_tax_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.p2p_hourly_candles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.p2p_active_shifts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.p2p_shift_closures ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.p2p_daily_total_closures ENABLE ROW LEVEL SECURITY;
 
 -- Políticas permisivas para la API Backend
 DROP POLICY IF EXISTS "Allow Backend MVP Access Users" ON public.p2p_users;
@@ -143,12 +200,24 @@ CREATE POLICY "Allow Backend MVP Access TaxConfig" ON public.p2p_tax_config FOR 
 DROP POLICY IF EXISTS "Allow Backend MVP Access HourlyCandles" ON public.p2p_hourly_candles;
 CREATE POLICY "Allow Backend MVP Access HourlyCandles" ON public.p2p_hourly_candles FOR ALL TO public USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow Backend MVP Access ActiveShifts" ON public.p2p_active_shifts;
+CREATE POLICY "Allow Backend MVP Access ActiveShifts" ON public.p2p_active_shifts FOR ALL TO public USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow Backend MVP Access ShiftClosures" ON public.p2p_shift_closures;
+CREATE POLICY "Allow Backend MVP Access ShiftClosures" ON public.p2p_shift_closures FOR ALL TO public USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow Backend MVP Access DailyTotalClosures" ON public.p2p_daily_total_closures;
+CREATE POLICY "Allow Backend MVP Access DailyTotalClosures" ON public.p2p_daily_total_closures FOR ALL TO public USING (true) WITH CHECK (true);
+
 GRANT ALL ON TABLE public.p2p_users TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.api_credentials TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.p2p_orders TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.daily_closings TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.p2p_tax_config TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.p2p_hourly_candles TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.p2p_active_shifts TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.p2p_shift_closures TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.p2p_daily_total_closures TO anon, authenticated, service_role;
 
 -- 8. Recolección 24/7 Automática en la Nube (Opcional con pg_cron + pg_net en Supabase)
 -- Activa las extensiones pg_cron y pg_net en Dashboard -> Database -> Extensions y ejecuta:

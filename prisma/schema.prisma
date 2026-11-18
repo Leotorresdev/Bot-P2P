@@ -34,10 +34,13 @@ model User {
   accounts         Account[]
   twoFactors       TwoFactor[]
   apiCredentials   ApiCredential[]
-  p2pOrders        P2POrder[]
-  inventoryLots    InventoryLot[]
-  dailyClosings    DailyClosing[]
-  auditLogs        AuditLog[]
+  p2pOrders          P2POrder[]
+  inventoryLots      InventoryLot[]
+  dailyClosings      DailyClosing[]
+  activeShift        ActiveShift?
+  shiftClosures      ShiftClosure[]
+  dailyTotalClosures DailyTotalClosure[]
+  auditLogs          AuditLog[]
 
   @@index([role])
   @@map("user")
@@ -219,6 +222,66 @@ model DailyClosing {
   @@unique([userId, closingDate])
   @@index([userId, createdAt])
   @@map("daily_closing")
+}
+
+// ==========================================
+// 5. CONTROL POR JORNADAS (TURNOS) Y CONSOLIDACIÓN DIARIA 23:59:59 VET
+// ==========================================
+
+model ActiveShift {
+  userId            String   @id
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shiftId           String
+  dateIsoVet        String
+  shiftNumber       Int      @default(1)
+  shiftStartTimeMs  BigInt
+  startTimeVetLabel String
+  merchantBadge     String   @default("BRONZE")
+  createdAt         DateTime @default(now())
+
+  @@map("p2p_active_shifts")
+}
+
+model ShiftClosure {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dateIsoVet        String
+  dateLabelVet      String
+  shiftNumber       Int
+  shiftStartTimeMs  BigInt
+  shiftEndTimeMs    BigInt
+  startTimeVetLabel String
+  endTimeVetLabel   String
+  closedBy          String   @default("MANUAL")
+  merchantBadge     String   @default("BRONZE")
+  badgeFeePercent   String
+  summaryJson       String
+  ordersJson        String
+  createdAt         DateTime @default(now())
+
+  @@index([userId, dateIsoVet, shiftNumber])
+  @@map("p2p_shift_closures")
+}
+
+model DailyTotalClosure {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dateIsoVet     String
+  monthIsoVet    String
+  dateLabelVet   String
+  executedAtVet  String   @default("23:59:59 VET")
+  shiftsCount    Int      @default(1)
+  merchantBadge  String   @default("BRONZE")
+  summaryJson    String
+  shiftsMetaJson String
+  ordersJson     String
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId, dateIsoVet])
+  @@index([userId, monthIsoVet, dateIsoVet])
+  @@map("p2p_daily_total_closures")
 }
 
 model AuditLog {

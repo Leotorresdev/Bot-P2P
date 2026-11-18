@@ -11,6 +11,7 @@ import {
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
 import { useLedgerUiStore } from "@/features/p2p-ledger/store/use-ledger-ui-store";
 import { FinanceLogo } from "@/components/ui/finance-logo";
+import { Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function LoginVaultScreen() {
@@ -272,7 +273,14 @@ export function LoginVaultScreen() {
       {/* COLUMNA DERECHA (Fondo #F6F8F7, Card centrada de 480px) */}
       <section className="flex flex-1 flex-col justify-between bg-[#F6F8F7] px-6 py-10 sm:px-16">
         {/* Barra Superior Derecha */}
-        <div className="flex w-full items-center justify-end gap-2.5">
+        <div className="flex w-full flex-wrap items-center justify-end gap-2.5">
+          <Link
+            href="/planes"
+            className="inline-flex items-center gap-1.5 rounded-full border border-[#2B3139] bg-[#0B0E11] px-3.5 py-[6px] font-sans text-[11px] font-bold leading-[14px] text-[#FCD535] shadow-sm transition-all hover:border-[#F0B90B] hover:bg-[#181A20]"
+          >
+            <Layers className="h-3.5 w-3.5 text-[#FCD535]" />
+            <span>Nuestros Planes</span>
+          </Link>
           <div className="flex items-center gap-1.5 rounded-full border border-[#E2E8E6] bg-white px-3 py-[5px]">
             <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-[#059669]" />
             <span className="font-sans text-[11px] font-semibold leading-[14px] text-[#0B1714]">
@@ -457,14 +465,26 @@ export function LoginVaultScreen() {
               </span>
             </button>
 
-            {/* Enlace para Registrarse */}
-            <div className="flex items-center justify-center gap-1.5 border-t border-slate-100 pt-3 text-xs text-slate-600">
-              <span>¿No tienes una cuenta de Bot P2P?</span>
+            {/* Enlace para Registrarse y Planes */}
+            <div className="flex flex-col gap-2.5 border-t border-slate-100 pt-3">
+              <div className="flex items-center justify-center gap-1.5 text-xs text-slate-600">
+                <span>¿No tienes una cuenta de Bot P2P?</span>
+                <Link
+                  href="/register"
+                  className="font-bold text-[#059669] hover:underline"
+                >
+                  Crear cuenta nueva &rarr;
+                </Link>
+              </div>
               <Link
-                href="/register"
-                className="font-bold text-[#059669] hover:underline"
+                href="/planes"
+                className="flex w-full items-center justify-center gap-2 rounded-[10px] border border-[#2B3139] bg-[#0B0E11] px-4 py-2.5 font-sans text-xs font-bold text-[#EAECEF] transition-all hover:border-[#FCD535]/60 hover:bg-[#181A20]"
               >
-                Crear cuenta nueva &rarr;
+                <Layers className="h-3.5 w-3.5 text-[#FCD535]" />
+                <span>Nuestros Planes</span>
+                <span className="rounded-full bg-[#FCD535]/15 px-2 py-0.5 font-mono text-[10px] font-extrabold text-[#FCD535]">
+                  Desde $30/mes
+                </span>
               </Link>
             </div>
           </div>

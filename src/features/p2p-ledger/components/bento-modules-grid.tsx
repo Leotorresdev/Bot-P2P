@@ -24,6 +24,7 @@ import {
 } from "@/features/p2p-ledger/api/use-p2p-queries";
 import { TradingViewP2PChart } from "@/features/p2p-ledger/components/tradingview-p2p-chart";
 import { CompactOperationsPanel } from "@/features/p2p-ledger/components/compact-operations-panel";
+import { ShiftControlPanel } from "@/features/p2p-ledger/components/shift-control-panel";
 import {
   MERCHANT_BADGE_META,
   type LotMethod,
@@ -250,6 +251,11 @@ export function BentoModulesGrid({
 
   return (
     <section className="flex flex-col gap-3">
+      {/* ================================================================= */}
+      {/* PANEL SUPERIOR DE CONTROL DE JORNADA (INICIAR / CERRAR / CIERRES) */}
+      {/* ================================================================= */}
+      <ShiftControlPanel />
+
       {/* ================================================================= */}
       {/* BARRA SUPERIOR PERSISTENTE: INSIGNIA + PERÍODO + PROMEDIO + CIERRE */}
       {/* ================================================================= */}
@@ -645,6 +651,9 @@ export function BentoModulesGrid({
       {hideLiveMarketSection ? (
         <CompactOperationsPanel
           summary={summary}
+          period={period}
+          date={period === "DAY" ? selectedDate : undefined}
+          month={period === "MONTH" ? selectedMonth : undefined}
           onOpenFullLedger={onOpenFullLedger}
         />
       ) : (
@@ -886,6 +895,9 @@ export function BentoModulesGrid({
         <div className="lg:col-span-5">
           <CompactOperationsPanel
             summary={summary}
+            period={period}
+            date={period === "DAY" ? selectedDate : undefined}
+            month={period === "MONTH" ? selectedMonth : undefined}
             onOpenFullLedger={onOpenFullLedger}
           />
         </div>

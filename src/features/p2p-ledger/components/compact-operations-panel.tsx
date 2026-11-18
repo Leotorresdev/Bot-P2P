@@ -16,6 +16,7 @@ import {
 import type {
   OrderStatusFilter,
   P2POrderRowDto,
+  PeriodFilter,
   PnlSummaryDto,
   TradeTypeFilter,
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
@@ -30,11 +31,17 @@ import { cn } from "@/lib/utils";
 
 interface CompactOperationsPanelProps {
   readonly summary?: PnlSummaryDto;
+  readonly period?: PeriodFilter;
+  readonly date?: string;
+  readonly month?: string;
   readonly onOpenFullLedger?: () => void;
 }
 
 export function CompactOperationsPanel({
   summary,
+  period = "TODAY",
+  date,
+  month,
   onOpenFullLedger,
 }: CompactOperationsPanelProps) {
   const [tradeType, setTradeType] = React.useState<TradeTypeFilter>("ALL");
@@ -46,13 +53,14 @@ export function CompactOperationsPanel({
 
   const syncMutation = useSyncBinanceMutation();
 
-  // Espejo Exacto de Binance P2P: period="ALL", orden estrictamente createTime DESC
   const { data: ordersData, isLoading, isFetching } = useP2POrdersQuery({
-    period: "ALL",
+    period,
+    date,
+    month,
     tradeType,
     status: statusFilter,
     page: 1,
-    limit: 30,
+    limit: 50,
   });
 
   const visibleOrders = React.useMemo(() => {
@@ -201,10 +209,14 @@ export function CompactOperationsPanel({
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <Clock className="h-7 w-7 text-slate-300 dark:text-[#2B3139]" />
             <p className="mt-2 text-xs font-bold text-slate-600 dark:text-[#EAECEF]">
-              Sin órdenes que coincidan con la vista
+              {period === "TODAY"
+                ? "Contadores en 0 · Sin órdenes en la jornada actual"
+                : "Sin órdenes que coincidan con la vista"}
             </p>
             <p className="mt-0.5 text-[11px] text-slate-400 dark:text-[#848E9C]">
-              Haz clic en Sync o verifica tus credenciales en la Bóveda.
+              {period === "TODAY"
+                ? "Presiona «Iniciar Jornada» para empezar desde cero o espera nuevas operaciones a partir del inicio del turno."
+                : "Haz clic en Sync o verifica tus credenciales en la Bóveda."}
             </p>
           </div>
         ) : (

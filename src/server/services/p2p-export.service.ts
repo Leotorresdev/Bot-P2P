@@ -78,9 +78,14 @@ export async function buildClosingWorkbookXlsx(
   ws.getRow(1).height = 28;
 
   // Subtítulo Sección 1
+  const isMonthReport = report.scope === "MONTH";
+  const dailyClosures = report.dailyClosures ?? [];
+
   ws.mergeCells("A2:K2");
   const sec1Header = ws.getCell("A2");
-  sec1Header.value = `SECCIÓN 1 — RESUMEN DE GANANCIAS E INSIGNIA APLICADA (${badgeMeta.label.toUpperCase()} ${badgeMeta.feeLabel}) • ${avgLabel}`;
+  sec1Header.value = isMonthReport
+    ? `SECCIÓN 1 — RESUMEN GENERAL DEL MES (${dailyClosures.length} DÍAS CERRADOS • ${report.totalShiftsInPeriod ?? 0} JORNADAS) • ${avgLabel}`
+    : `SECCIÓN 1 — RESUMEN DE GANANCIAS E INSIGNIA APLICADA (${badgeMeta.label.toUpperCase()} ${badgeMeta.feeLabel}) • ${avgLabel}`;
   sec1Header.font = { bold: true, size: 10, color: { argb: "FF065F46" } };
   sec1Header.fill = {
     type: "pattern",
@@ -94,7 +99,14 @@ export async function buildClosingWorkbookXlsx(
     readonly [string, string, string, string, boolean?]
   > = [
     ["Período del Reporte", report.periodLabel, "Generado (Hora VET)", report.generatedAtVet],
-    ["Insignia Aplicada", `${badgeMeta.label} (${badgeMeta.feeLabel})`, "Total Órdenes Período", `${s.totalOrdersInPeriod} (${s.reconciledOrdersCount} completadas)`],
+    [
+      "Insignia Aplicada",
+      `${badgeMeta.label} (${badgeMeta.feeLabel})`,
+      isMonthReport ? "Días y Jornadas Consolidadas" : "Total Órdenes Período",
+      isMonthReport
+        ? `${dailyClosures.length} días cerrados · ${report.totalShiftsInPeriod ?? 0} jornadas (${s.totalOrdersInPeriod} órdenes)`
+        : `${s.totalOrdersInPeriod} (${s.reconciledOrdersCount} completadas)`,
+    ],
     ["Volumen Total Vendido", `${s.totalSoldUsdt} USDT`, "Total Bs. Recibidos (Ventas)", `${s.totalSoldVes} Bs.`],
     ["Volumen Total Comprado", `${s.totalBoughtUsdt} USDT`, "Total Bs. Pagados (Compras)", `${s.totalBoughtVes} Bs.`],
     ["Volumen Total Movido (Compra+Venta)", `${s.totalVolumeUsdt} USDT`, "Volumen de la Vuelta (min)", `${s.vueltaVolumeUsdt} USDT`],
@@ -158,11 +170,118 @@ export async function buildClosingWorkbookXlsx(
   // Espacio separador
   currentRowIdx++;
 
-  // Subtítulo Sección 2
+  // Si es Cierre Mensual, insertar SECCIÓN 2: TABLA DE CIERRES DIARIOS DEL MES (DÍA POR DÍA)
+  if (isMonthReport) {
+    ws.mergeCells(`A${currentRowIdx}:K${currentRowIdx}`);
+    const dailySecHeader = ws.getCell(`A${currentRowIdx}`);
+    dailySecHeader.value =
+      "SECCIÓN 2 — TABLA DE CIERRES DIARIOS DEL MES (DÍA POR DÍA • CONSOLIDADO DE JORNADAS)";
+    dailySecHeader.font = { bold: true, size: 10, color: { argb: "FFFFFFFF" } };
+    dailySecHeader.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF1E3A8A" },
+    };
+    dailySecHeader.alignment = {
+      vertical: "middle",
+      horizontal: "left",
+      indent: 1,
+    };
+    ws.getRow(currentRowIdx).height = 24;
+    currentRowIdx++;
+
+    const dailyHeaderRow = ws.getRow(currentRowIdx);
+    dailyHeaderRow.values = [
+      "Fecha (VET)",
+      "Jornadas",
+      "Insignia",
+      "Comprado (USDT / Bs)",
+      "Vendido (USDT / Bs)",
+      "Vol. Movido (USDT)",
+      "Prom. Compra / Venta",
+      "Brecha Día",
+      "Comisión (USDT / Bs)",
+      "Ganancia Neta (USDT)",
+      "Ganancia Neta (Bs)",
+    ];
+    dailyHeaderRow.height = 22;
+    dailyHeaderRow.eachCell((cell) => {
+      cell.font = { bold: true, size: 9.5, color: { argb: "FFFFFFFF" } };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FF1E293B" },
+      };
+      cell.alignment = { vertical: "middle", horizontal: "center" };
+      cell.border = {
+        bottom: { style: "medium", color: { argb: "FF334155" } },
+      };
+    });
+    currentRowIdx++;
+
+    if (dailyClosures.length === 0) {
+      ws.mergeCells(`A${currentRowIdx}:K${currentRowIdx}`);
+      const emptyCell = ws.getCell(`A${currentRowIdx}`);
+      emptyCell.value =
+        "Sin Cierres Totales del Día registrados en este mes calendario.";
+      emptyCell.font = { italic: true, size: 9.5, color: { argb: "FF64748B" } };
+      emptyCell.alignment = {
+        vertical: "middle",
+        horizontal: "center",
+      };
+      ws.getRow(currentRowIdx).height = 20;
+      currentRowIdx++;
+    } else {
+      for (const dayClosure of dailyClosures) {
+        const ds = dayClosure.summary;
+        const dRow = ws.getRow(currentRowIdx);
+        dRow.values = [
+          dayClosure.dateLabelVet,
+          `${dayClosure.shiftsCount} ${dayClosure.shiftsCount === 1 ? "jornada" : "jornadas"}`,
+          dayClosure.merchantBadgeLabel,
+          `${ds.totalBoughtUsdt} USDT (${ds.totalBoughtVes} Bs)`,
+          `${ds.totalSoldUsdt} USDT (${ds.totalSoldVes} Bs)`,
+          parseSafeDecimal(ds.totalVolumeUsdt).toNumber(),
+          `C: ${ds.activeAvgBuyRateVes} | V: ${ds.activeAvgSellRateVes} Bs`,
+          `${ds.brechaPointsVes} pts`,
+          `-${ds.volumeCommissionUsdt} USDT (-${ds.volumeCommissionVes} Bs)`,
+          parseSafeDecimal(ds.netProfitUsdt).toNumber(),
+          parseSafeDecimal(ds.netProfitVes).toNumber(),
+        ];
+        dRow.height = 20;
+
+        dRow.getCell(1).alignment = { vertical: "middle", horizontal: "center" };
+        dRow.getCell(2).alignment = { vertical: "middle", horizontal: "center" };
+        dRow.getCell(3).alignment = { vertical: "middle", horizontal: "center" };
+        dRow.getCell(6).numFmt = "#,##0.00";
+        dRow.getCell(8).alignment = { vertical: "middle", horizontal: "center" };
+        dRow.getCell(8).font = { bold: true, color: { argb: "FF047857" } };
+        dRow.getCell(10).numFmt = "#,##0.00";
+        dRow.getCell(11).numFmt = "#,##0.00";
+
+        const netColor = ds.isNetProfitNegative ? "FFBE123C" : "FF047857";
+        dRow.getCell(10).font = { bold: true, color: { argb: netColor } };
+        dRow.getCell(11).font = { bold: true, color: { argb: netColor } };
+
+        dRow.eachCell((cell) => {
+          cell.border = {
+            bottom: { style: "thin", color: { argb: "FFE2E8F0" } },
+          };
+        });
+
+        currentRowIdx++;
+      }
+    }
+
+    currentRowIdx++;
+  }
+
+  // Subtítulo Sección de Órdenes (Sección 3 en Mensual, Sección 2 en Diario/Jornada)
   ws.mergeCells(`A${currentRowIdx}:K${currentRowIdx}`);
   const sec2Header = ws.getCell(`A${currentRowIdx}`);
-  sec2Header.value =
-    "SECCIÓN 2 — HISTORIAL ÍNTEGRO DE ÓRDENES BINANCE P2P (ORDEN CRONOLÓGICO EXACTO, TODOS LOS TIPOS Y ESTADOS)";
+  sec2Header.value = isMonthReport
+    ? "SECCIÓN 3 — HISTORIAL COMPLETO DE ÓRDENES DEL MES (ORDEN CRONOLÓGICO EXACTO BINANCE P2P)"
+    : "SECCIÓN 2 — HISTORIAL ÍNTEGRO DE ÓRDENES BINANCE P2P (ORDEN CRONOLÓGICO EXACTO, TODOS LOS TIPOS Y ESTADOS)";
   sec2Header.font = { bold: true, size: 10, color: { argb: "FFFFFFFF" } };
   sec2Header.fill = {
     type: "pattern",
@@ -364,14 +483,75 @@ export async function buildClosingPdfBytes(
   });
 
   const extDoc = doc as unknown as AutoTableDocExtension;
-  const afterSummaryY = extDoc.lastAutoTable?.finalY ?? 76;
+  let afterSummaryY = extDoc.lastAutoTable?.finalY ?? 76;
 
-  // Sección 2: Historial Íntegro de Órdenes
+  // Si es Cierre Mensual en PDF, incluir Sección 2: Tabla de Cierres Diarios del Mes
+  const isMonthPdf = report.scope === "MONTH";
+  const pdfDailyClosures = report.dailyClosures ?? [];
+
+  if (isMonthPdf) {
+    doc.setTextColor(15, 23, 42);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text(
+      "SECCIÓN 2 - TABLA DE CIERRES DIARIOS DEL MES (DÍA POR DÍA)",
+      12,
+      afterSummaryY + 8
+    );
+
+    autoTable(doc, {
+      startY: afterSummaryY + 11,
+      margin: { left: 12, right: 12 },
+      theme: "grid",
+      styles: {
+        fontSize: 7.5,
+        cellPadding: 1.8,
+      },
+      headStyles: {
+        fillColor: [30, 58, 138],
+        textColor: [255, 255, 255],
+        fontStyle: "bold",
+      },
+      head: [
+        [
+          "Fecha VET",
+          "Jornadas",
+          "Insignia",
+          "Comprado (USDT / Bs)",
+          "Vendido (USDT / Bs)",
+          "Vol. Movido",
+          "Brecha Día",
+          "Comisión",
+          "Ganancia Neta (USDT / Bs)",
+        ],
+      ],
+      body:
+        pdfDailyClosures.length === 0
+          ? [["Sin cierres diarios registrados en este mes", "-", "-", "-", "-", "-", "-", "-", "-"]]
+          : pdfDailyClosures.map((dc) => [
+              dc.dateLabelVet,
+              `${dc.shiftsCount}`,
+              dc.merchantBadgeLabel,
+              `${dc.summary.totalBoughtUsdt} USDT (${dc.summary.totalBoughtVes} Bs)`,
+              `${dc.summary.totalSoldUsdt} USDT (${dc.summary.totalSoldVes} Bs)`,
+              `${dc.summary.totalVolumeUsdt} USDT`,
+              `${dc.summary.brechaPointsVes} pts`,
+              `-${dc.summary.volumeCommissionUsdt} USDT`,
+              `${dc.summary.netProfitUsdt} USDT (${dc.summary.netProfitVes} Bs)`,
+            ]),
+    });
+
+    afterSummaryY = extDoc.lastAutoTable?.finalY ?? afterSummaryY + 35;
+  }
+
+  // Sección de Historial Íntegro de Órdenes
   doc.setTextColor(15, 23, 42);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
   doc.text(
-    "SECCIÓN 2 - HISTORIAL ÍNTEGRO DE ÓRDENES (ORDEN CRONOLÓGICO EXACTO BINANCE P2P)",
+    isMonthPdf
+      ? "SECCIÓN 3 - HISTORIAL COMPLETO DE ÓRDENES DEL MES (ORDEN CRONOLÓGICO BINANCE)"
+      : "SECCIÓN 2 - HISTORIAL ÍNTEGRO DE ÓRDENES (ORDEN CRONOLÓGICO EXACTO BINANCE P2P)",
     12,
     afterSummaryY + 8
   );
@@ -469,6 +649,51 @@ export function buildClosingCsv(report: ClosingReportData): string {
     [sanitizeCsvCell("Comisión Insignia (USDT / Bs)"), sanitizeCsvCell(`-${s.volumeCommissionUsdt} USDT`), sanitizeCsvCell(`-${s.volumeCommissionVes} Bs.`)].join(","),
     [sanitizeCsvCell("Ganancia Neta Real (USDT / Bs)"), sanitizeCsvCell(`${s.netProfitUsdt} USDT`), sanitizeCsvCell(`${s.netProfitVes} Bs.`)].join(","),
     "",
+  ];
+
+  if (report.scope === "MONTH" && (report.dailyClosures?.length ?? 0) > 0) {
+    lines.push(sanitizeCsvCell("SECCION 2 - CIERRES DIARIOS DEL MES (DIA POR DIA)"));
+    lines.push(
+      [
+        "Fecha_VET",
+        "Jornadas_Cerradas",
+        "Insignia",
+        "Comprado_USDT",
+        "Comprado_Bs",
+        "Vendido_USDT",
+        "Vendido_Bs",
+        "Volumen_Movido_USDT",
+        "Brecha_Pts",
+        "Comision_USDT",
+        "Comision_Bs",
+        "Ganancia_Neta_USDT",
+        "Ganancia_Neta_Bs",
+      ].join(",")
+    );
+    for (const dc of report.dailyClosures ?? []) {
+      const ds = dc.summary;
+      lines.push(
+        [
+          sanitizeCsvCell(dc.dateLabelVet),
+          String(dc.shiftsCount),
+          sanitizeCsvCell(dc.merchantBadgeLabel),
+          sanitizeCsvCell(ds.totalBoughtUsdt),
+          sanitizeCsvCell(ds.totalBoughtVes),
+          sanitizeCsvCell(ds.totalSoldUsdt),
+          sanitizeCsvCell(ds.totalSoldVes),
+          sanitizeCsvCell(ds.totalVolumeUsdt),
+          sanitizeCsvCell(ds.brechaPointsVes),
+          sanitizeCsvCell(ds.volumeCommissionUsdt),
+          sanitizeCsvCell(ds.volumeCommissionVes),
+          sanitizeCsvCell(ds.netProfitUsdt),
+          sanitizeCsvCell(ds.netProfitVes),
+        ].join(",")
+      );
+    }
+    lines.push("");
+  }
+
+  lines.push(
     [
       "Fecha",
       "Hora_VET",
@@ -481,8 +706,8 @@ export function buildClosingCsv(report: ClosingReportData): string {
       "Precio_Bs",
       "Cantidad_USDT",
       "Total_Bs",
-    ].join(","),
-  ];
+    ].join(",")
+  );
 
   for (const o of report.orders) {
     lines.push(

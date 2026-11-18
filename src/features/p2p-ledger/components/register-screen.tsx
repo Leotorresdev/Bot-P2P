@@ -425,14 +425,22 @@ export function RegisterScreen() {
             </form>
           )}
 
-          {/* Enlace para volver a Iniciar Sesión */}
-          <div className="flex items-center justify-center gap-1.5 text-xs text-slate-600">
-            <span>¿Ya tienes una cuenta registrada?</span>
+          {/* Enlace para volver a Iniciar Sesión y ver Planes */}
+          <div className="flex flex-col items-center gap-2 text-xs text-slate-600">
+            <div className="flex items-center justify-center gap-1.5">
+              <span>¿Ya tienes una cuenta registrada?</span>
+              <Link
+                href="/login"
+                className="font-bold text-emerald-700 hover:text-emerald-800 hover:underline"
+              >
+                Iniciar Sesión &rarr;
+              </Link>
+            </div>
             <Link
-              href="/login"
-              className="font-bold text-emerald-700 hover:text-emerald-800 hover:underline"
+              href="/planes"
+              className="font-semibold text-slate-600 underline-offset-2 hover:text-emerald-700 hover:underline"
             >
-              Iniciar Sesión &rarr;
+              Ver Nuestros Planes y Skills ($30/mes) &rarr;
             </Link>
           </div>
         </div>

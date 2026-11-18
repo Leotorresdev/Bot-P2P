@@ -261,7 +261,7 @@ export function ClosingExportPanel({
                     Descargar Cierre del Mes Completo
                   </h4>
                   <p className="text-[11px] text-slate-500">
-                    Paginación íntegra (100/pág.) del día 1 al último día
+                    Resumen del Mes + Tabla Día por Día + Historial de Órdenes
                   </p>
                 </div>
               </div>

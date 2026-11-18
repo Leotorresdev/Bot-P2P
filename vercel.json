@@ -6,6 +6,12 @@
       "maxDuration": 60
     }
   },
+  "crons": [
+    {
+      "path": "/api/p2p/cron-daily-close",
+      "schedule": "59 3 * * *"
+    }
+  ],
   "headers": [
     {
       "source": "/api/(.*)",

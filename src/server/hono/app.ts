@@ -13,6 +13,7 @@ import {
   GetBanksQuerySchema,
   GetChartDataQuerySchema,
   GetOrdersQuerySchema,
+  GetShiftStateQuerySchema,
   GetSummaryQuerySchema,
   LoginCredentialsSchema,
   RegisterUserSchema,
@@ -682,15 +683,21 @@ export const routes = baseApp
         return c.redirect("/login");
       }
 
-      const { scope, date, month, format } = c.req.valid("query");
+      const { scope, date, month, shiftId, format } = c.req.valid("query");
       const report = await P2PAccountingService.buildClosingReport({
         userId: user.id,
         scope,
         date,
         month,
+        shiftId,
       });
 
-      const prefix = scope === "MONTH" ? "Cierre_Mensual" : "Cierre_Diario";
+      const prefix =
+        scope === "MONTH"
+          ? "Cierre_Mensual"
+          : scope === "SHIFT"
+            ? "Cierre_Jornada"
+            : "Cierre_Diario";
       const safeKey = report.periodKey.replace(/[^A-Za-z0-9_-]/g, "-");
 
       if (format === "pdf") {
@@ -760,6 +767,74 @@ export const routes = baseApp
         "Content-Disposition": `attachment; filename="${prefix}_P2P_${safeKey}.csv"`,
       },
     });
+  })
+  .get(
+    "/p2p/shifts/state",
+    zValidator("query", GetShiftStateQuerySchema),
+    async (c) => {
+      const user = c.get("user");
+      if (!user) {
+        return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
+      }
+      const { date } = c.req.valid("query");
+      const state = await P2PAccountingService.getShiftDashboardState(
+        user.id,
+        date
+      );
+      return c.json({ data: state }, 200);
+    }
+  )
+  .post("/p2p/shifts/start", async (c) => {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
+    }
+    if (user.role === "AUDITOR_SENIAT") {
+      return c.json(
+        {
+          error:
+            "Acceso denegado: El Modo Contador es de solo lectura y no puede iniciar jornadas.",
+        },
+        403
+      );
+    }
+    const state = await P2PAccountingService.startShift(user.id);
+    return c.json(
+      {
+        message: `Jornada #${state.activeShift?.shiftNumber ?? 1} iniciada desde las ${state.activeShift?.startTimeVetLabel ?? ""} VET.`,
+        data: state,
+      },
+      200
+    );
+  })
+  .post("/p2p/shifts/close", async (c) => {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
+    }
+    if (user.role === "AUDITOR_SENIAT") {
+      return c.json(
+        {
+          error:
+            "Acceso denegado: El Modo Contador es de solo lectura y no puede cerrar jornadas.",
+        },
+        403
+      );
+    }
+    const result = await P2PAccountingService.closeShift(user.id);
+    return c.json(
+      {
+        message: result.closure
+          ? `Jornada #${result.closure.shiftNumber} cerrada y guardada con éxito.`
+          : "No había ninguna jornada activa para cerrar.",
+        data: result,
+      },
+      200
+    );
+  })
+  .get("/p2p/cron-daily-close", async (c) => {
+    const result = await P2PAccountingService.runCronDailyCloseAllUsers();
+    return c.json({ data: result }, 200);
   });
 
 export type AppType = typeof routes;

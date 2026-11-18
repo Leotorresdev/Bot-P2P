@@ -37,6 +37,7 @@ export const p2pQueryKeys = {
     readonly limit: number;
   }) => [...p2pQueryKeys.all, "orders", filters] as const,
   closings: () => [...p2pQueryKeys.all, "closings"] as const,
+  shifts: (date?: string) => [...p2pQueryKeys.all, "shifts", date ?? "today"] as const,
   taxConfig: () => [...p2pQueryKeys.all, "tax-config"] as const,
   merchantBadge: () => [...p2pQueryKeys.all, "merchant-badge"] as const,
 };
@@ -348,6 +349,69 @@ export function useUpdateTaxConfigMutation() {
           "error" in json && typeof json.error === "string"
             ? json.error
             : "No se pudo actualizar la configuración fiscal."
+        );
+      }
+      return json;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
+    },
+  });
+}
+
+export function useShiftStateQuery(date?: string) {
+  return useQuery({
+    queryKey: p2pQueryKeys.shifts(date),
+    queryFn: async () => {
+      const res = await apiClient.api.p2p.shifts.state.$get({
+        query: {
+          date: date || undefined,
+        },
+      });
+      if (!res.ok) {
+        throw new Error("No se pudo obtener el estado de la jornada.");
+      }
+      const json = await res.json();
+      return json.data;
+    },
+    refetchInterval: 15_000,
+  });
+}
+
+export function useStartShiftMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      const res = await apiClient.api.p2p.shifts.start.$post();
+      const json = await res.json();
+      if (!res.ok || "error" in json) {
+        throw new Error(
+          "error" in json && typeof json.error === "string"
+            ? json.error
+            : "No se pudo iniciar la jornada."
+        );
+      }
+      return json;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
+    },
+  });
+}
+
+export function useCloseShiftMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      const res = await apiClient.api.p2p.shifts.close.$post();
+      const json = await res.json();
+      if (!res.ok || "error" in json) {
+        throw new Error(
+          "error" in json && typeof json.error === "string"
+            ? json.error
+            : "No se pudo cerrar la jornada."
         );
       }
       return json;

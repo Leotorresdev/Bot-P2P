@@ -114,7 +114,7 @@ export const GetOrdersQuerySchema = z.object({
 });
 
 export const ExportClosingQuerySchema = z.object({
-  scope: z.enum(["DAY", "MONTH"]).default("DAY"),
+  scope: z.enum(["DAY", "MONTH", "SHIFT"]).default("DAY"),
   date: z
     .string()
     .trim()
@@ -125,9 +125,19 @@ export const ExportClosingQuerySchema = z.object({
     .trim()
     .regex(/^\d{4}-\d{2}$/, "Formato requerido YYYY-MM")
     .optional(),
+  shiftId: z.string().trim().max(80).optional(),
   format: z.enum(["xlsx", "csv", "pdf"]).default("xlsx"),
 });
 export type ExportClosingQueryInput = z.infer<typeof ExportClosingQuerySchema>;
+
+export const GetShiftStateQuerySchema = z.object({
+  date: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Formato requerido YYYY-MM-DD")
+    .optional(),
+});
+export type GetShiftStateQueryInput = z.infer<typeof GetShiftStateQuerySchema>;
 
 export const UpdateMerchantBadgeSchema = z.object({
   badge: MerchantBadgeSchema,
@@ -385,6 +395,80 @@ export interface DailyClosingActaDto {
   readonly netFreeProfitUsdt: string;
   readonly netFreeProfitVes: string;
   readonly integrityHashSha256: string;
+}
+
+// =========================================================
+// 4. CONTRATOS DE CONTROL POR JORNADAS (TURNOS) Y CONSOLIDACIÓN DIARIA
+// =========================================================
+
+export interface ActiveShiftDto {
+  readonly shiftId: string;
+  readonly userId: string;
+  readonly dateIsoVet: string;
+  readonly dateLabelVet: string;
+  readonly shiftNumber: number;
+  readonly shiftStartTimeMs: number;
+  readonly startTimeVetLabel: string;
+  readonly merchantBadge: MerchantBadgeType;
+}
+
+export interface ShiftClosureDto {
+  readonly id: string;
+  readonly userId: string;
+  readonly dateIsoVet: string;
+  readonly dateLabelVet: string;
+  readonly shiftNumber: number;
+  readonly shiftStartTimeMs: number;
+  readonly shiftEndTimeMs: number;
+  readonly startTimeVetLabel: string;
+  readonly endTimeVetLabel: string;
+  readonly closedBy: "MANUAL" | "AUTO_2359";
+  readonly merchantBadge: MerchantBadgeType;
+  readonly merchantBadgeLabel: string;
+  readonly badgeFeePercent: string;
+  readonly summary: PnlSummaryDto;
+  readonly orders: readonly P2POrderRowDto[];
+  readonly createdAtIso: string;
+}
+
+export interface ShiftDigestMetaDto {
+  readonly id: string;
+  readonly shiftNumber: number;
+  readonly startTimeVetLabel: string;
+  readonly endTimeVetLabel: string;
+  readonly closedBy: "MANUAL" | "AUTO_2359";
+  readonly merchantBadge: MerchantBadgeType;
+  readonly merchantBadgeLabel: string;
+  readonly totalOrdersCount: number;
+  readonly completedOrdersCount: number;
+  readonly totalVolumeUsdt: string;
+  readonly netProfitUsdt: string;
+  readonly netProfitVes: string;
+}
+
+export interface DailyTotalClosureDto {
+  readonly id: string;
+  readonly userId: string;
+  readonly dateIsoVet: string;
+  readonly monthIsoVet: string;
+  readonly dateLabelVet: string;
+  readonly executedAtVet: string;
+  readonly shiftsCount: number;
+  readonly merchantBadge: MerchantBadgeType;
+  readonly merchantBadgeLabel: string;
+  readonly summary: PnlSummaryDto;
+  readonly shiftsMeta: readonly ShiftDigestMetaDto[];
+  readonly orders: readonly P2POrderRowDto[];
+  readonly updatedAtIso: string;
+}
+
+export interface ShiftDashboardStateDto {
+  readonly activeShift: ActiveShiftDto | null;
+  readonly selectedDateIsoVet: string;
+  readonly selectedDateLabelVet: string;
+  readonly nextShiftNumber: number;
+  readonly todayShifts: readonly ShiftClosureDto[];
+  readonly todayTotalClosure: DailyTotalClosureDto | null;
 }
 
 export const ChartTimeframeSchema = z

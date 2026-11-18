@@ -1,9 +1,12 @@
 import "server-only";
+import crypto from "node:crypto";
 import Decimal from "decimal.js";
 import {
   MERCHANT_BADGE_META,
+  type ActiveShiftDto,
   type BankLiveMonitorDto,
   type DailyClosingActaDto,
+  type DailyTotalClosureDto,
   type LotMethod,
   type MerchantBadgeConfigDto,
   type MerchantBadgeType,
@@ -12,9 +15,13 @@ import {
   type P2POrderRowDto,
   type PeriodFilter,
   type PnlSummaryDto,
+  type ShiftClosureDto,
+  type ShiftDashboardStateDto,
+  type ShiftDigestMetaDto,
   type TradeTypeFilter,
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
 import {
+  formatDateIsoVe,
   formatVetOrderTimestamp,
   getCurrentVetDateIso,
   getCurrentVetMonthIso,
@@ -70,12 +77,14 @@ interface BinanceC2COrderItem {
 }
 
 export interface ClosingReportData {
-  readonly scope: "DAY" | "MONTH";
+  readonly scope: "DAY" | "MONTH" | "SHIFT";
   readonly periodKey: string;
   readonly periodLabel: string;
   readonly generatedAtVet: string;
   readonly summary: PnlSummaryDto;
   readonly orders: readonly P2POrderRowDto[];
+  readonly dailyClosures?: readonly DailyTotalClosureDto[];
+  readonly totalShiftsInPeriod?: number;
 }
 
 /**
@@ -617,6 +626,194 @@ export function calculateVueltaSummary(params: {
   };
 }
 
+/**
+ * Une listados de órdenes de múltiples cierres sin duplicar `orderNumber`
+ * y respetando estrictamente el orden cronológico de Binance (`createTimeMs DESC`).
+ */
+export function mergeChronologicalOrders(
+  orderLists: ReadonlyArray<readonly P2POrderRowDto[]>
+): P2POrderRowDto[] {
+  const map = new Map<string, P2POrderRowDto>();
+  for (const list of orderLists) {
+    for (const order of list) {
+      if (!map.has(order.orderNumber)) {
+        map.set(order.orderNumber, order);
+      }
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => {
+    if (b.createTimeMs !== a.createTimeMs) {
+      return b.createTimeMs - a.createTimeMs;
+    }
+    return b.orderNumber.localeCompare(a.orderNumber);
+  });
+}
+
+/**
+ * Suma de forma exacta con `Decimal.js` una colección de resúmenes de cierres
+ * (por ejemplo, todos los `ShiftClosure` de un día para `DailyTotalClosure`,
+ * o todos los `DailyTotalClosure` de un mes para el Cierre Mensual).
+ */
+export function buildAggregatedSummaryFromClosures(params: {
+  readonly summaries: readonly PnlSummaryDto[];
+  readonly orders: readonly P2POrderRowDto[];
+  readonly period: PeriodFilter;
+  readonly periodLabel: string;
+  readonly badge: MerchantBadgeType;
+  readonly seniatTaxPercent?: number;
+}): PnlSummaryDto {
+  const {
+    summaries,
+    orders,
+    period,
+    periodLabel,
+    badge,
+    seniatTaxPercent = 16,
+  } = params;
+
+  const badgeMeta = MERCHANT_BADGE_META[badge];
+
+  let totalSoldUsdt = new Decimal(0);
+  let totalSoldVes = new Decimal(0);
+  let totalBoughtUsdt = new Decimal(0);
+  let totalBoughtVes = new Decimal(0);
+  let totalVolumeUsdt = new Decimal(0);
+
+  let grossProfitVes = new Decimal(0);
+  let grossProfitUsdt = new Decimal(0);
+  let volumeCommissionUsdt = new Decimal(0);
+  let volumeCommissionBs = new Decimal(0);
+  let netProfitUsdt = new Decimal(0);
+  let netProfitBs = new Decimal(0);
+
+  for (const s of summaries) {
+    totalSoldUsdt = totalSoldUsdt.plus(parseSafeDecimal(s.totalSoldUsdt));
+    totalSoldVes = totalSoldVes.plus(parseSafeDecimal(s.totalSoldVes));
+    totalBoughtUsdt = totalBoughtUsdt.plus(parseSafeDecimal(s.totalBoughtUsdt));
+    totalBoughtVes = totalBoughtVes.plus(parseSafeDecimal(s.totalBoughtVes));
+    totalVolumeUsdt = totalVolumeUsdt.plus(parseSafeDecimal(s.totalVolumeUsdt));
+
+    grossProfitVes = grossProfitVes.plus(parseSafeDecimal(s.grossProfitVes));
+    grossProfitUsdt = grossProfitUsdt.plus(parseSafeDecimal(s.grossProfitUsdt));
+    volumeCommissionUsdt = volumeCommissionUsdt.plus(
+      parseSafeDecimal(s.volumeCommissionUsdt)
+    );
+    volumeCommissionBs = volumeCommissionBs.plus(
+      parseSafeDecimal(s.volumeCommissionVes)
+    );
+    netProfitUsdt = netProfitUsdt.plus(parseSafeDecimal(s.netProfitUsdt));
+    netProfitBs = netProfitBs.plus(parseSafeDecimal(s.netProfitVes));
+  }
+
+  // Precio Promedio Ponderado Total (Total Bs ÷ Total USDT) y Brecha
+  const activeAvgSell = totalSoldUsdt.gt(0)
+    ? totalSoldVes.div(totalSoldUsdt)
+    : new Decimal(0);
+  const activeAvgBuy = totalBoughtUsdt.gt(0)
+    ? totalBoughtVes.div(totalBoughtUsdt)
+    : new Decimal(0);
+
+  const hasBothSides = totalSoldUsdt.gt(0) && totalBoughtUsdt.gt(0);
+  const brechaPoints = hasBothSides
+    ? activeAvgSell.minus(activeAvgBuy)
+    : new Decimal(0);
+  const spreadPct =
+    hasBothSides && activeAvgBuy.gt(0)
+      ? brechaPoints.div(activeAvgBuy).mul(100)
+      : new Decimal(0);
+
+  const vueltaVolumeUsdt = Decimal.min(totalSoldUsdt, totalBoughtUsdt);
+  const diffUsdt = totalSoldUsdt.minus(totalBoughtUsdt);
+
+  let pendingDirection: "NONE" | "BUY_BACK" | "SELL_OUT" = "NONE";
+  let pendingUsdtDec = new Decimal(0);
+  if (diffUsdt.gt(0)) {
+    pendingDirection = "BUY_BACK";
+    pendingUsdtDec = diffUsdt;
+  } else if (diffUsdt.lt(0)) {
+    pendingDirection = "SELL_OUT";
+    pendingUsdtDec = diffUsdt.abs();
+  }
+
+  let completedSellCount = 0;
+  let completedBuyCount = 0;
+  let cancelledCount = 0;
+  let appealCount = 0;
+  let inProgressCount = 0;
+
+  for (const order of orders) {
+    if (order.statusCategory === "CANCELLED") {
+      cancelledCount += 1;
+    } else if (order.statusCategory === "IN_APPEAL") {
+      appealCount += 1;
+    } else if (order.statusCategory === "COMPLETED") {
+      if (order.tradeType === "SELL") completedSellCount += 1;
+      else completedBuyCount += 1;
+    } else {
+      inProgressCount += 1;
+    }
+  }
+
+  return {
+    period,
+    periodLabel,
+    method: "FIFO",
+    merchantBadge: badgeMeta.id,
+    merchantBadgeLabel: badgeMeta.label,
+    badgeFeePercent: String(badgeMeta.feePercent),
+    badgeFeeFactor: badgeMeta.feeFactor,
+
+    totalSoldUsdt: formatDecimalMoney(totalSoldUsdt, 2),
+    totalSoldVes: formatDecimalMoney(totalSoldVes, 2),
+    totalBoughtUsdt: formatDecimalMoney(totalBoughtUsdt, 2),
+    totalBoughtVes: formatDecimalMoney(totalBoughtVes, 2),
+    totalVolumeUsdt: formatDecimalMoney(totalVolumeUsdt, 2),
+
+    avgSellRateWeightedVes: formatDecimalMoney(activeAvgSell, 2),
+    avgBuyRateWeightedVes: formatDecimalMoney(activeAvgBuy, 2),
+    activeAvgSellRateVes: formatDecimalMoney(activeAvgSell, 2),
+    activeAvgBuyRateVes: formatDecimalMoney(activeAvgBuy, 2),
+    brechaPointsVes: `${brechaPoints.gte(0) ? "+" : ""}${brechaPoints.toFixed(2)}`,
+    averageSpreadPercent: `${spreadPct.gte(0) ? "+" : ""}${spreadPct.toFixed(2)}%`,
+
+    vueltaVolumeUsdt: formatDecimalMoney(vueltaVolumeUsdt, 2),
+    pendingDirection,
+    pendingUsdt: formatDecimalMoney(pendingUsdtDec, 2),
+
+    grossProfitVes: formatDecimalMoney(grossProfitVes, 2),
+    grossProfitUsdt: grossProfitUsdt.toFixed(2),
+    volumeCommissionUsdt: volumeCommissionUsdt.toFixed(2),
+    volumeCommissionVes: formatDecimalMoney(volumeCommissionBs, 2),
+    netProfitUsdt: netProfitUsdt.toFixed(2),
+    netProfitVes: formatDecimalMoney(netProfitBs, 2),
+    isNetProfitNegative: netProfitUsdt.lt(0),
+
+    completedSellCount,
+    completedBuyCount,
+    cancelledCount,
+    appealCount,
+    inProgressCount,
+    totalOrdersInPeriod: orders.length,
+    reconciledOrdersCount: completedSellCount + completedBuyCount,
+
+    netFreeProfitUsdt: netProfitUsdt.toFixed(2),
+    netFreeProfitVes: formatDecimalMoney(netProfitBs, 2),
+    seniatTax16Usdt: "0.00",
+    seniatTax16Ves: "0.00",
+    seniatTaxRatePercent: String(seniatTaxPercent),
+    makerFeeRatePercent: String(badgeMeta.feePercent),
+    exemptCapitalUsdt: formatDecimalMoney(totalBoughtUsdt, 2),
+    exemptCapitalVes: formatDecimalMoney(totalBoughtVes, 2),
+    currentWacCostVes: activeAvgBuy.toFixed(2),
+    availableVaultUsdt: formatDecimalMoney(pendingUsdtDec, 2),
+    totalBinanceFeesUsdt: volumeCommissionUsdt.toFixed(2),
+    nextClosingTimeVet: "11:59 PM (-4:00 UTC)",
+    lastSyncSecondsAgo: 2,
+    workingCapitalUsdt: formatDecimalMoney(totalVolumeUsdt, 2),
+    workingCapitalVes: formatDecimalMoney(totalSoldVes.plus(totalBoughtVes), 2),
+  };
+}
+
 function resolvePeriodBounds(params: {
   readonly period: PeriodFilter;
   readonly date?: string;
@@ -951,6 +1148,9 @@ export class P2PAccountingService {
   /**
    * Calcula los KPIs en tiempo real usando el motor por "Vuelta" y Brecha de Puntos
    * con la insignia persistente del usuario.
+   * Cuando `period === "TODAY"`, opera en modo Control por Jornada:
+   * - Si no hay jornada activa (`activeShift === null`), devuelve todo en 0.00.
+   * - Si hay jornada activa, contabiliza únicamente órdenes con `createTimeMs >= shiftStartTimeMs`.
    */
   public static async getSummary(params: {
     readonly userId: string;
@@ -959,16 +1159,60 @@ export class P2PAccountingService {
     readonly date?: string;
     readonly month?: string;
   }): Promise<PnlSummaryDto> {
+    await this.ensurePendingDailyClosuresConsolidated(params.userId);
+
+    const taxConfig = await SupabaseVaultRepository.getUserTaxConfig(
+      params.userId
+    );
+
+    if (params.period === "TODAY") {
+      const activeShift = await SupabaseVaultRepository.getActiveShift(
+        params.userId
+      );
+
+      if (!activeShift) {
+        return calculateVueltaSummary({
+          orders: [],
+          period: "TODAY",
+          periodLabel: "Jornada cerrada · En espera (0.00)",
+          method: params.method,
+          badge: taxConfig.merchantBadge,
+          seniatTaxPercent: taxConfig.seniatTaxPercent,
+        });
+      }
+
+      const nowMs = Date.now();
+      const allMirrorOrders = await this.getUserOrdersFromVaultOrBinance(
+        params.userId,
+        false,
+        { startMs: activeShift.shiftStartTimeMs, endMs: nowMs + 60_000 }
+      );
+
+      const shiftOrders = allMirrorOrders.filter(
+        (o) => o.createTimeMs >= activeShift.shiftStartTimeMs
+      );
+
+      return calculateVueltaSummary({
+        orders: shiftOrders,
+        period: "TODAY",
+        periodLabel: `Jornada #${activeShift.shiftNumber} · Activa desde ${activeShift.startTimeVetLabel} VET`,
+        method: params.method,
+        badge: taxConfig.merchantBadge,
+        seniatTaxPercent: taxConfig.seniatTaxPercent,
+      });
+    }
+
     const bounds = resolvePeriodBounds({
       period: params.period,
       date: params.date,
       month: params.month,
     });
 
-    const [allMirrorOrders, taxConfig] = await Promise.all([
-      this.getUserOrdersFromVaultOrBinance(params.userId, false, bounds),
-      SupabaseVaultRepository.getUserTaxConfig(params.userId),
-    ]);
+    const allMirrorOrders = await this.getUserOrdersFromVaultOrBinance(
+      params.userId,
+      false,
+      bounds
+    );
 
     const periodOrders =
       bounds.startMs !== null && bounds.endMs !== null
@@ -991,7 +1235,7 @@ export class P2PAccountingService {
 
   /**
    * Devuelve el espejo exacto de órdenes paginado manteniendo el orden cronológico de Binance.
-   * No elimina órdenes canceladas ni apeladas salvo que el usuario elija un filtro explícito.
+   * Cuando `period === "TODAY"`, filtra estrictamente por la jornada activa (o devuelve 0 órdenes si está cerrada).
    */
   public static async getPaginatedOrders(params: {
     readonly userId: string;
@@ -1014,13 +1258,100 @@ export class P2PAccountingService {
     readonly inProgressCount: number;
     readonly availableDates: readonly string[];
   }> {
-    // Filtrado únicamente por parámetros explícitos del usuario (por defecto period="ALL", status="ALL")
+    await this.ensurePendingDailyClosuresConsolidated(params.userId);
+
     const effectivePeriod: PeriodFilter =
       params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date)
         ? "DAY"
         : params.month && /^\d{4}-\d{2}$/.test(params.month)
           ? "MONTH"
           : (params.period ?? "ALL");
+
+    if (effectivePeriod === "TODAY") {
+      const activeShift = await SupabaseVaultRepository.getActiveShift(
+        params.userId
+      );
+
+      if (!activeShift) {
+        return {
+          items: [],
+          totalCount: 0,
+          sellCount: 0,
+          buyCount: 0,
+          completedCount: 0,
+          cancelledCount: 0,
+          appealCount: 0,
+          inProgressCount: 0,
+          availableDates: [],
+        };
+      }
+
+      const nowMs = Date.now();
+      const allOrders = await this.getUserOrdersFromVaultOrBinance(
+        params.userId,
+        false,
+        { startMs: activeShift.shiftStartTimeMs, endMs: nowMs + 60_000 }
+      );
+
+      const shiftFiltered = allOrders.filter((order) => {
+        if (order.createTimeMs < activeShift.shiftStartTimeMs) {
+          return false;
+        }
+        if (params.tradeType !== "ALL" && order.tradeType !== params.tradeType) {
+          return false;
+        }
+        if (
+          params.status &&
+          params.status !== "ALL" &&
+          order.statusCategory !== params.status
+        ) {
+          return false;
+        }
+        if (
+          params.bank &&
+          params.bank.trim() !== "" &&
+          !order.payMethodName
+            .toLowerCase()
+            .includes(params.bank.trim().toLowerCase())
+        ) {
+          return false;
+        }
+        return true;
+      });
+
+      const sellCount = shiftFiltered.filter((o) => o.tradeType === "SELL").length;
+      const buyCount = shiftFiltered.filter((o) => o.tradeType === "BUY").length;
+      const completedCount = shiftFiltered.filter(
+        (o) => o.statusCategory === "COMPLETED"
+      ).length;
+      const cancelledCount = shiftFiltered.filter(
+        (o) => o.statusCategory === "CANCELLED"
+      ).length;
+      const appealCount = shiftFiltered.filter(
+        (o) => o.statusCategory === "IN_APPEAL"
+      ).length;
+      const inProgressCount = shiftFiltered.filter(
+        (o) => o.statusCategory === "IN_PROGRESS"
+      ).length;
+
+      const startIndex = (params.page - 1) * params.limit;
+      const pagedItems = shiftFiltered.slice(
+        startIndex,
+        startIndex + params.limit
+      );
+
+      return {
+        items: pagedItems,
+        totalCount: shiftFiltered.length,
+        sellCount,
+        buyCount,
+        completedCount,
+        cancelledCount,
+        appealCount,
+        inProgressCount,
+        availableDates: [activeShift.dateLabelVet],
+      };
+    }
 
     const bounds =
       effectivePeriod === "ALL" && !params.date && !params.month
@@ -1107,63 +1438,488 @@ export class P2PAccountingService {
     };
   }
 
+  // =========================================================================
+  // SISTEMA DE CONTROL POR JORNADAS (TURNOS) Y CONSOLIDACIÓN 11:59:59 PM VET
+  // =========================================================================
+
   /**
-   * Construye el reporte completo de Cierre del Día o Cierre del Mes sincronizando
-   * todas las páginas de Binance SAPI para el período solicitado.
+   * Consolida todas las jornadas cerradas (`ShiftClosure`) de una fecha `dateIsoVet`
+   * en el registro `DailyTotalClosure` del día.
+   */
+  public static async consolidateDayClosures(
+    userId: string,
+    dateIsoVet: string
+  ): Promise<DailyTotalClosureDto | null> {
+    const dayShifts = await SupabaseVaultRepository.getShiftClosuresByDate(
+      userId,
+      dateIsoVet
+    );
+    if (dayShifts.length === 0) {
+      return null;
+    }
+
+    const taxConfig = await SupabaseVaultRepository.getUserTaxConfig(userId);
+    const lastShift = dayShifts[dayShifts.length - 1];
+    const effectiveBadge =
+      lastShift?.merchantBadge ?? taxConfig.merchantBadge;
+    const badgeMeta = MERCHANT_BADGE_META[effectiveBadge];
+
+    const dateLabelVet = formatDateIsoVe(dateIsoVet);
+    const monthIsoVet = dateIsoVet.slice(0, 7);
+
+    const mergedOrders = mergeChronologicalOrders(
+      dayShifts.map((s) => s.orders)
+    );
+
+    const periodLabel = `Cierre Total del Día: ${dateLabelVet} (${dayShifts.length} ${dayShifts.length === 1 ? "jornada" : "jornadas"})`;
+
+    const summary = buildAggregatedSummaryFromClosures({
+      summaries: dayShifts.map((s) => s.summary),
+      orders: mergedOrders,
+      period: "DAY",
+      periodLabel,
+      badge: effectiveBadge,
+      seniatTaxPercent: taxConfig.seniatTaxPercent,
+    });
+
+    const shiftsMeta: ShiftDigestMetaDto[] = dayShifts.map((s) => ({
+      id: s.id,
+      shiftNumber: s.shiftNumber,
+      startTimeVetLabel: s.startTimeVetLabel,
+      endTimeVetLabel: s.endTimeVetLabel,
+      closedBy: s.closedBy,
+      merchantBadge: s.merchantBadge,
+      merchantBadgeLabel: s.merchantBadgeLabel,
+      totalOrdersCount: s.orders.length,
+      completedOrdersCount: s.summary.reconciledOrdersCount,
+      totalVolumeUsdt: s.summary.totalVolumeUsdt,
+      netProfitUsdt: s.summary.netProfitUsdt,
+      netProfitVes: s.summary.netProfitVes,
+    }));
+
+    const id = `dtot_${userId}_${dateIsoVet}`;
+    const executedAtVet =
+      lastShift?.closedBy === "AUTO_2359"
+        ? "23:59:59 VET (Auto-Cierre)"
+        : `${lastShift?.endTimeVetLabel ?? "23:59:59"} VET`;
+
+    const dailyTotalClosure: DailyTotalClosureDto = {
+      id,
+      userId,
+      dateIsoVet,
+      monthIsoVet,
+      dateLabelVet,
+      executedAtVet,
+      shiftsCount: dayShifts.length,
+      merchantBadge: effectiveBadge,
+      merchantBadgeLabel: badgeMeta.label,
+      summary,
+      shiftsMeta,
+      orders: mergedOrders,
+      updatedAtIso: new Date().toISOString(),
+    };
+
+    const hashPayload = [
+      userId,
+      dateIsoVet,
+      String(dayShifts.length),
+      String(summary.reconciledOrdersCount),
+      summary.totalVolumeUsdt,
+      summary.grossProfitVes,
+      summary.netProfitVes,
+    ].join("|");
+    const integrityHashSha256 = crypto
+      .createHash("sha256")
+      .update(hashPayload)
+      .digest("hex");
+
+    await SupabaseVaultRepository.saveDailyTotalClosure(
+      dailyTotalClosure,
+      integrityHashSha256
+    );
+
+    return dailyTotalClosure;
+  }
+
+  /**
+   * Verificación automática de seguridad (11:59:59 PM VET):
+   * 1. Si existe una jornada abierta de un día anterior (o si ya son las 23:59:59 VET del día de la jornada),
+   *    la cierra automáticamente a las 23:59:59 VET (`closedBy: "AUTO_2359"`).
+   * 2. Si existen días con `ShiftClosure` que aún no tienen su `DailyTotalClosure` sincronizado,
+   *    los consolida al instante.
+   */
+  public static async ensurePendingDailyClosuresConsolidated(
+    userId: string,
+    forceCloseIf2359Today: boolean = false
+  ): Promise<void> {
+    const nowMs = Date.now();
+    const todayIso = getCurrentVetDateIso(nowMs);
+    const activeShift = await SupabaseVaultRepository.getActiveShift(userId);
+
+    if (activeShift) {
+      const shiftDayRange = getVetDayRangeMs(activeShift.dateIsoVet);
+      const isPastDay = activeShift.dateIsoVet < todayIso;
+      const isAtOrPast235959 = nowMs >= shiftDayRange.endMs - 999;
+
+      if (isPastDay || isAtOrPast235959 || forceCloseIf2359Today) {
+        const autoEndMs = isPastDay
+          ? shiftDayRange.endMs
+          : Math.min(nowMs, shiftDayRange.endMs);
+        await this.closeShiftInternal(userId, activeShift, {
+          forcedEndMs: Math.max(activeShift.shiftStartTimeMs, autoEndMs),
+          closedBy: "AUTO_2359",
+        });
+      }
+    }
+
+    const [allShifts, allDailyTotals] = await Promise.all([
+      SupabaseVaultRepository.getAllUserShiftClosures(userId),
+      SupabaseVaultRepository.getAllUserDailyTotalClosures(userId),
+    ]);
+
+    const shiftsByDate = new Map<string, ShiftClosureDto[]>();
+    for (const s of allShifts) {
+      const list = shiftsByDate.get(s.dateIsoVet) ?? [];
+      list.push(s);
+      shiftsByDate.set(s.dateIsoVet, list);
+    }
+
+    const totalsByDate = new Map<string, DailyTotalClosureDto>(
+      allDailyTotals.map((t) => [t.dateIsoVet, t])
+    );
+
+    for (const [dateIso, shifts] of shiftsByDate.entries()) {
+      const existingTotal = totalsByDate.get(dateIso);
+      if (!existingTotal || existingTotal.shiftsCount !== shifts.length) {
+        await this.consolidateDayClosures(userId, dateIso);
+      }
+    }
+  }
+
+  private static async closeShiftInternal(
+    userId: string,
+    activeShift: ActiveShiftDto,
+    options?: {
+      readonly forcedEndMs?: number;
+      readonly closedBy?: "MANUAL" | "AUTO_2359";
+    }
+  ): Promise<ShiftClosureDto> {
+    const shiftEndTimeMs = Math.max(
+      activeShift.shiftStartTimeMs,
+      options?.forcedEndMs ?? Date.now()
+    );
+    const closedBy = options?.closedBy ?? "MANUAL";
+
+    const [allSynced, taxConfig] = await Promise.all([
+      this.syncBinanceRange(
+        userId,
+        activeShift.shiftStartTimeMs,
+        shiftEndTimeMs
+      ),
+      SupabaseVaultRepository.getUserTaxConfig(userId),
+    ]);
+
+    // Filtrar estrictamente órdenes dentro del intervalo [shiftStartTimeMs, shiftEndTimeMs]
+    const shiftOrders = allSynced.filter(
+      (o) =>
+        o.createTimeMs >= activeShift.shiftStartTimeMs &&
+        o.createTimeMs <= shiftEndTimeMs
+    );
+
+    const endTsInfo = formatVetOrderTimestamp(shiftEndTimeMs);
+    const endTimeVetLabel =
+      closedBy === "AUTO_2359" &&
+      activeShift.dateIsoVet < getCurrentVetDateIso()
+        ? "23:59:59"
+        : endTsInfo.timeLabel;
+
+    const effectiveBadge = activeShift.merchantBadge || taxConfig.merchantBadge;
+    const badgeMeta = MERCHANT_BADGE_META[effectiveBadge];
+
+    const periodLabel = `Cierre Jornada #${activeShift.shiftNumber} (${activeShift.dateLabelVet} · ${activeShift.startTimeVetLabel} - ${endTimeVetLabel} VET)`;
+
+    const summary = calculateVueltaSummary({
+      orders: shiftOrders,
+      period: "TODAY",
+      periodLabel,
+      method: "FIFO",
+      badge: effectiveBadge,
+      seniatTaxPercent: taxConfig.seniatTaxPercent,
+    });
+
+    const closure: ShiftClosureDto = {
+      id: `shf_${activeShift.dateIsoVet}_j${activeShift.shiftNumber}_${activeShift.shiftStartTimeMs}`,
+      userId,
+      dateIsoVet: activeShift.dateIsoVet,
+      dateLabelVet: activeShift.dateLabelVet,
+      shiftNumber: activeShift.shiftNumber,
+      shiftStartTimeMs: activeShift.shiftStartTimeMs,
+      shiftEndTimeMs,
+      startTimeVetLabel: activeShift.startTimeVetLabel,
+      endTimeVetLabel,
+      closedBy,
+      merchantBadge: effectiveBadge,
+      merchantBadgeLabel: badgeMeta.label,
+      badgeFeePercent: String(badgeMeta.feePercent),
+      summary,
+      orders: shiftOrders,
+      createdAtIso: new Date().toISOString(),
+    };
+
+    await SupabaseVaultRepository.saveShiftClosure(closure);
+    await SupabaseVaultRepository.clearActiveShift(userId);
+    await this.consolidateDayClosures(userId, activeShift.dateIsoVet);
+
+    return closure;
+  }
+
+  /**
+   * Obtiene el estado actual de la jornada y el listado de "Mis Cierres de Hoy".
+   */
+  public static async getShiftDashboardState(
+    userId: string,
+    dateIso?: string
+  ): Promise<ShiftDashboardStateDto> {
+    await this.ensurePendingDailyClosuresConsolidated(userId);
+
+    const targetDateIso =
+      dateIso && /^\d{4}-\d{2}-\d{2}$/.test(dateIso)
+        ? dateIso
+        : getCurrentVetDateIso();
+    const targetDateLabel = formatDateIsoVe(targetDateIso);
+
+    const [activeShift, todayShifts, todayTotalClosure] = await Promise.all([
+      SupabaseVaultRepository.getActiveShift(userId),
+      SupabaseVaultRepository.getShiftClosuresByDate(userId, targetDateIso),
+      SupabaseVaultRepository.getDailyTotalClosureByDate(userId, targetDateIso),
+    ]);
+
+    return {
+      activeShift,
+      selectedDateIsoVet: targetDateIso,
+      selectedDateLabelVet: targetDateLabel,
+      nextShiftNumber: todayShifts.length + 1,
+      todayShifts,
+      todayTotalClosure,
+    };
+  }
+
+  /**
+   * Inicia una nueva jornada en `Date.now()` (hora America/Caracas), empezando en 0.00.
+   */
+  public static async startShift(
+    userId: string
+  ): Promise<ShiftDashboardStateDto> {
+    await this.ensurePendingDailyClosuresConsolidated(userId);
+
+    const existingActive = await SupabaseVaultRepository.getActiveShift(userId);
+    if (existingActive) {
+      return this.getShiftDashboardState(userId, existingActive.dateIsoVet);
+    }
+
+    const nowMs = Date.now();
+    const nowVet = formatVetOrderTimestamp(nowMs);
+    const [todayShifts, taxConfig] = await Promise.all([
+      SupabaseVaultRepository.getShiftClosuresByDate(userId, nowVet.dateIso),
+      SupabaseVaultRepository.getUserTaxConfig(userId),
+    ]);
+
+    const shiftNumber = todayShifts.length + 1;
+    const newShift: ActiveShiftDto = {
+      shiftId: `act_${nowVet.dateIso}_j${shiftNumber}_${nowMs}`,
+      userId,
+      dateIsoVet: nowVet.dateIso,
+      dateLabelVet: nowVet.dateLabel,
+      shiftNumber,
+      shiftStartTimeMs: nowMs,
+      startTimeVetLabel: nowVet.timeLabel,
+      merchantBadge: taxConfig.merchantBadge,
+    };
+
+    await SupabaseVaultRepository.saveActiveShift(newShift);
+    return this.getShiftDashboardState(userId, nowVet.dateIso);
+  }
+
+  /**
+   * Cierra la jornada actual en `Date.now()`, guarda el `ShiftClosure`,
+   * consolida el avance en `DailyTotalClosure` y deja el tablero en 0.00.
+   */
+  public static async closeShift(userId: string): Promise<{
+    readonly closure: ShiftClosureDto | null;
+    readonly state: ShiftDashboardStateDto;
+  }> {
+    const activeShift = await SupabaseVaultRepository.getActiveShift(userId);
+    if (!activeShift) {
+      const state = await this.getShiftDashboardState(userId);
+      return { closure: null, state };
+    }
+
+    const closure = await this.closeShiftInternal(userId, activeShift, {
+      forcedEndMs: Date.now(),
+      closedBy: "MANUAL",
+    });
+
+    const state = await this.getShiftDashboardState(
+      userId,
+      activeShift.dateIsoVet
+    );
+    return { closure, state };
+  }
+
+  /**
+   * Ejecutado por el Cron de las 23:59 VET para auto-cerrar cualquier jornada abierta
+   * y consolidar el Cierre Total del Día de todos los usuarios.
+   */
+  public static async runCronDailyCloseAllUsers(): Promise<{
+    readonly processedUsers: number;
+    readonly executedAtVet: string;
+  }> {
+    const userIds = await SupabaseVaultRepository.getAllUserIds();
+    for (const userId of userIds) {
+      await this.ensurePendingDailyClosuresConsolidated(userId, true);
+    }
+    const nowVet = formatVetOrderTimestamp(Date.now());
+    return {
+      processedUsers: userIds.length,
+      executedAtVet: `${nowVet.dateTimeLabel} (-4:00 UTC)`,
+    };
+  }
+
+  /**
+   * Construye el reporte completo de:
+   * - `SHIFT`: un cierre parcial de jornada individual (`ShiftClosure`)
+   * - `DAY`: el Cierre Total del Día (`DailyTotalClosure`)
+   * - `MONTH`: el Cierre del Mes Completo alimentado de los `DailyTotalClosure` del mes
    */
   public static async buildClosingReport(params: {
     readonly userId: string;
-    readonly scope: "DAY" | "MONTH";
+    readonly scope: "DAY" | "MONTH" | "SHIFT";
     readonly date?: string;
     readonly month?: string;
+    readonly shiftId?: string;
   }): Promise<ClosingReportData> {
+    await this.ensurePendingDailyClosuresConsolidated(params.userId);
+
     const taxConfig = await SupabaseVaultRepository.getUserTaxConfig(
       params.userId
     );
+    const nowVet = formatVetOrderTimestamp(Date.now());
+    const generatedAtVet = `${nowVet.dateTimeLabel} (-4:00 UTC)`;
 
-    const range =
-      params.scope === "MONTH"
-        ? getVetMonthRangeMs(params.month || getCurrentVetMonthIso())
-        : getVetDayRangeMs(params.date || getCurrentVetDateIso());
+    // 1. Reporte de Cierre Parcial de Jornada Individual (SHIFT)
+    if (params.scope === "SHIFT" && params.shiftId) {
+      const shiftClosure = await SupabaseVaultRepository.getShiftClosureById(
+        params.userId,
+        params.shiftId
+      );
+      if (shiftClosure) {
+        return {
+          scope: "SHIFT",
+          periodKey: `${shiftClosure.dateIsoVet}_Jornada_${shiftClosure.shiftNumber}`,
+          periodLabel: `Cierre Jornada #${shiftClosure.shiftNumber} — ${shiftClosure.dateLabelVet} (${shiftClosure.startTimeVetLabel} a ${shiftClosure.endTimeVetLabel} VET)`,
+          generatedAtVet,
+          summary: shiftClosure.summary,
+          orders: shiftClosure.orders,
+          totalShiftsInPeriod: 1,
+        };
+      }
+    }
 
-    const periodKey =
-      params.scope === "MONTH"
-        ? (params.month || getCurrentVetMonthIso())
-        : (params.date || getCurrentVetDateIso());
+    // 2. Reporte de Cierre del Mes Completo (MONTH) — Alimentado desde DailyTotalClosure
+    if (params.scope === "MONTH") {
+      const targetMonth =
+        params.month && /^\d{4}-\d{2}$/.test(params.month)
+          ? params.month
+          : getCurrentVetMonthIso();
+      const monthRange = getVetMonthRangeMs(targetMonth);
 
-    // Sincronización exhaustiva paginada en bloques <= 28d desde Binance para no omitir ninguna orden
+      const dailyClosures =
+        await SupabaseVaultRepository.getDailyTotalClosuresByMonth(
+          params.userId,
+          targetMonth
+        );
+
+      const consolidatedOrders = mergeChronologicalOrders(
+        dailyClosures.map((d) => d.orders)
+      );
+      const totalShiftsInMonth = dailyClosures.reduce(
+        (acc, d) => acc + d.shiftsCount,
+        0
+      );
+
+      const periodLabel = `Cierre Mensual Consolidado: ${monthRange.labelEs} (${dailyClosures.length} ${dailyClosures.length === 1 ? "día cerrado" : "días cerrados"} · ${totalShiftsInMonth} ${totalShiftsInMonth === 1 ? "jornada" : "jornadas"})`;
+
+      const summary = buildAggregatedSummaryFromClosures({
+        summaries: dailyClosures.map((d) => d.summary),
+        orders: consolidatedOrders,
+        period: "MONTH",
+        periodLabel,
+        badge: taxConfig.merchantBadge,
+        seniatTaxPercent: taxConfig.seniatTaxPercent,
+      });
+
+      return {
+        scope: "MONTH",
+        periodKey: targetMonth,
+        periodLabel,
+        generatedAtVet,
+        summary,
+        orders: consolidatedOrders,
+        dailyClosures,
+        totalShiftsInPeriod: totalShiftsInMonth,
+      };
+    }
+
+    // 3. Reporte de Cierre Total del Día (DAY)
+    const targetDate =
+      params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date)
+        ? params.date
+        : getCurrentVetDateIso();
+
+    const existingDailyTotal =
+      await SupabaseVaultRepository.getDailyTotalClosureByDate(
+        params.userId,
+        targetDate
+      );
+
+    if (existingDailyTotal) {
+      return {
+        scope: "DAY",
+        periodKey: targetDate,
+        periodLabel: existingDailyTotal.summary.periodLabel,
+        generatedAtVet,
+        summary: existingDailyTotal.summary,
+        orders: existingDailyTotal.orders,
+        dailyClosures: [existingDailyTotal],
+        totalShiftsInPeriod: existingDailyTotal.shiftsCount,
+      };
+    }
+
+    // Fallback para días históricos previos sin jornadas manuales registradas
+    const range = getVetDayRangeMs(targetDate);
     const allSynced = await this.syncBinanceRange(
       params.userId,
       range.startMs,
       range.endMs
     );
-
-    // Respetar orden cronológico exacto dentro del rango (00:00:00 a 23:59:59 hora Venezuela)
     const periodOrders = allSynced.filter(
       (o) => o.createTimeMs >= range.startMs && o.createTimeMs <= range.endMs
     );
-
-    const periodLabel =
-      params.scope === "MONTH"
-        ? `Cierre Mensual: ${range.labelEs} (-4:00 UTC)`
-        : `Cierre Diario: ${range.labelEs} (00:00:00 - 23:59:59 VET)`;
-
+    const periodLabel = `Cierre Diario: ${range.labelEs} (00:00:00 - 23:59:59 VET)`;
     const summary = calculateVueltaSummary({
       orders: periodOrders,
-      period: params.scope === "MONTH" ? "MONTH" : "DAY",
+      period: "DAY",
       periodLabel,
       method: "FIFO",
       badge: taxConfig.merchantBadge,
       seniatTaxPercent: taxConfig.seniatTaxPercent,
     });
 
-    const nowVet = formatVetOrderTimestamp(Date.now());
-
     return {
-      scope: params.scope,
-      periodKey,
+      scope: "DAY",
+      periodKey: targetDate,
       periodLabel,
-      generatedAtVet: `${nowVet.dateTimeLabel} (-4:00 UTC)`,
+      generatedAtVet,
       summary,
       orders: periodOrders,
     };
@@ -1188,6 +1944,8 @@ export class P2PAccountingService {
       readonly spotTradingBlocked: boolean;
     };
   }> {
+    await this.ensurePendingDailyClosuresConsolidated(userId);
+
     const [closings, credential] = await Promise.all([
       SupabaseVaultRepository.getUserClosings(userId),
       SupabaseVaultRepository.getBinanceCredential(userId),
