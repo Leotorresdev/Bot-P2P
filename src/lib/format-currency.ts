@@ -79,14 +79,15 @@ export function getTradeTypeBadgeStyle(tradeType: "BUY" | "SELL"): {
     return {
       label: "COMPRA",
       badgeClass:
-        "border-emerald-200 bg-emerald-50 text-emerald-700",
-      textClass: "text-emerald-700",
+        "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-[#0ECB81]/30 dark:bg-[#0ECB81]/15 dark:text-[#0ECB81]",
+      textClass: "text-emerald-700 dark:text-[#0ECB81]",
     };
   }
   return {
     label: "VENTA",
-    badgeClass: "border-rose-200 bg-rose-50 text-rose-700",
-    textClass: "text-rose-700",
+    badgeClass:
+      "border-rose-200 bg-rose-50 text-rose-700 dark:border-[#F6465D]/30 dark:bg-[#F6465D]/15 dark:text-[#F6465D]",
+    textClass: "text-rose-700 dark:text-[#F6465D]",
   };
 }
 
@@ -97,24 +98,28 @@ export function getStatusCategoryBadgeStyle(category: OrderStatusCategory): {
   switch (category) {
     case "COMPLETED":
       return {
-        badgeClass: "border-emerald-200 bg-emerald-50 text-emerald-700",
-        dotClass: "bg-emerald-500",
+        badgeClass:
+          "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-[#0ECB81]/30 dark:bg-[#0ECB81]/15 dark:text-[#0ECB81]",
+        dotClass: "bg-emerald-500 dark:bg-[#0ECB81]",
       };
     case "CANCELLED":
       return {
-        badgeClass: "border-slate-200 bg-slate-100 text-slate-600",
-        dotClass: "bg-slate-400",
+        badgeClass:
+          "border-slate-200 bg-slate-100 text-slate-600 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#848E9C]",
+        dotClass: "bg-slate-400 dark:bg-[#848E9C]",
       };
     case "IN_APPEAL":
       return {
-        badgeClass: "border-amber-200 bg-amber-50 text-amber-800",
-        dotClass: "bg-amber-500",
+        badgeClass:
+          "border-amber-200 bg-amber-50 text-amber-800 dark:border-[#FCD535]/35 dark:bg-[#FCD535]/15 dark:text-[#FCD535]",
+        dotClass: "bg-amber-500 dark:bg-[#FCD535]",
       };
     case "IN_PROGRESS":
     default:
       return {
-        badgeClass: "border-sky-200 bg-sky-50 text-sky-700",
-        dotClass: "bg-sky-500",
+        badgeClass:
+          "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-400",
+        dotClass: "bg-sky-500 dark:bg-sky-400",
       };
   }
 }

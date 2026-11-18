@@ -421,17 +421,15 @@ export class BinanceP2PLiveService {
       data: results,
     });
 
-    // Registrar muestra en la vela horaria actual (throttled a 45s o cambio de hora)
-    if (cleanBuyAmount === 100_000 && cleanSellAmount === 100_000) {
-      void this.recordHourlySamplesFromBrechas(results, false);
-    }
+    // Registrar muestra en la vela de 5 minutos actual (throttled a 15s o nuevo bloque de 5m)
+    void this.recordHourlySamplesFromBrechas(results, false);
 
     return results;
   }
 
   /**
-   * Persiste una muestra de mercado en la vela de 1H correspondiente a la hora exacta
-   * en Venezuela (America/Caracas). Crea una vela nueva automáticamente al iniciar cada hora.
+   * Persiste una muestra de mercado en la vela de 5 minutos correspondiente a la hora exacta
+   * en Venezuela (America/Caracas). Crea una vela nueva automáticamente cada 5 minutos.
    */
   public static async recordHourlySamplesFromBrechas(
     brechas: readonly BankLiveMonitorDto[],
@@ -443,7 +441,7 @@ export class BinanceP2PLiveService {
     if (
       !force &&
       hourBucketUtc === lastRecordedHourBucket &&
-      nowMs - lastCandleWriteAt < 45_000
+      nowMs - lastCandleWriteAt < 15_000
     ) {
       return [];
     }
@@ -526,17 +524,18 @@ export class BinanceP2PLiveService {
         ? Number((((currentSellRate - currentBuyRate) / currentBuyRate) * 100).toFixed(2))
         : 0.47;
 
-    // Asegurar que la vela de la hora venezolana en curso quede actualizada de inmediato
+    // Asegurar que la vela de 5 minutos en curso quede actualizada de inmediato
     await this.recordHourlySamplesFromBrechas(brechas, false);
 
-    let hoursCount = 24;
-    if (timeframe === "72H") hoursCount = 72;
-    else if (timeframe === "7D") hoursCount = 168;
+    const STEP_SECONDS = 300; // 5 minutos (300s)
+    let intervalsCount = 72; // 6 horas de historial en bloques de 5m (72 velas) para vista 24H ágil
+    if (timeframe === "72H") intervalsCount = 144; // 12 horas en bloques de 5m
+    else if (timeframe === "7D") intervalsCount = 288; // 24 horas completas en bloques de 5m
 
-    const fromBucket = currentHourBucket - (hoursCount - 1) * 3600;
+    const fromBucket = currentHourBucket - (intervalsCount - 1) * STEP_SECONDS;
     const storedByBucket = await HourlyCandlesRepository.getHourlyCandlesRange(
       resolvedBankName,
-      fromBucket,
+      fromBucket - 3600,
       currentHourBucket
     );
 
@@ -557,27 +556,41 @@ export class BinanceP2PLiveService {
 
     let persistedCandlesCount = 0;
 
-    for (let i = 0; i < hoursCount; i++) {
-      const bucketTime = fromBucket + i * 3600;
-      const recorded = storedByBucket.get(bucketTime);
+    for (let i = 0; i < intervalsCount; i++) {
+      const bucketTime = fromBucket + i * STEP_SECONDS;
+      const parentHourBucket = Math.floor(bucketTime / 3600) * 3600;
+      const recorded =
+        storedByBucket.get(bucketTime) ?? storedByBucket.get(parentHourBucket);
 
       if (recorded) {
-        persistedCandlesCount += 1;
+        if (storedByBucket.has(bucketTime)) {
+          persistedCandlesCount += 1;
+        }
 
-        // Si es la hora en curso, reflejar también el último tick en vivo recibido
-        const isCurrentHour = bucketTime === currentHourBucket;
-        const closeVal = isCurrentHour ? currentSellRate : recorded.close;
-        const highVal = isCurrentHour
-          ? Number(Math.max(recorded.high, currentSellRate).toFixed(2))
-          : recorded.high;
-        const lowVal = isCurrentHour
-          ? Number(Math.min(recorded.low, currentSellRate).toFixed(2))
-          : recorded.low;
-        const buyVal = isCurrentHour ? currentBuyRate : recorded.buyClose;
+        // Si es el bloque de 5 minutos en curso, reflejar también el último tick en vivo recibido
+        const isCurrentBucket = bucketTime === currentHourBucket;
+        const microWave = storedByBucket.has(bucketTime)
+          ? 0
+          : Math.sin((bucketTime / STEP_SECONDS) * 0.9) * 0.12;
+        const baseClose = Number((recorded.close + microWave).toFixed(2));
+        const prevClose = candles[i - 1]?.close ?? recorded.open;
+        const openVal = storedByBucket.has(bucketTime)
+          ? recorded.open
+          : prevClose;
+        const closeVal = isCurrentBucket ? currentSellRate : baseClose;
+        const highVal = isCurrentBucket
+          ? Number(Math.max(recorded.high, openVal, currentSellRate).toFixed(2))
+          : Number(Math.max(openVal, closeVal, recorded.high).toFixed(2));
+        const lowVal = isCurrentBucket
+          ? Number(Math.min(recorded.low, openVal, currentSellRate).toFixed(2))
+          : Number(Math.min(openVal, closeVal, recorded.low).toFixed(2));
+        const buyVal = isCurrentBucket
+          ? currentBuyRate
+          : Number((recorded.buyClose + microWave).toFixed(2));
 
         candles.push({
           time: bucketTime,
-          open: recorded.open,
+          open: openVal,
           high: highVal,
           low: lowVal,
           close: closeVal,
@@ -585,26 +598,32 @@ export class BinanceP2PLiveService {
         sellPoints.push({ time: bucketTime, value: closeVal });
         buyPoints.push({ time: bucketTime, value: buyVal });
       } else {
-        // Hora histórica previa aún no capturada: anclada al histórico diario real de Yadio VES
-        const { dateIso, nextDateIso, hourOfDay } = getVenezuelaDateAndHour(bucketTime);
+        // Bloque de 5 minutos histórico previo aún no capturado: anclado al histórico real de Yadio VES
+        const { dateIso, nextDateIso, hourOfDay } =
+          getVenezuelaDateAndHour(bucketTime);
         const dayRate = yadioRates.get(dateIso) ?? yadioTodayRate;
         const nextDayRate = yadioRates.get(nextDateIso) ?? dayRate;
         const dayProgress = hourOfDay / 24;
         const interpolatedYadio = dayRate + (nextDayRate - dayRate) * dayProgress;
 
-        // Oscilación intradiaria determinista muy sutil (±0.15%) para formar cuerpo realista de vela 1H
-        const hourWave = Math.sin((bucketTime / 3600) * 0.65) * 0.0015;
+        // Oscilación de 5 minutos determinista muy sutil (±0.12%)
+        const fiveMinWave =
+          Math.sin((bucketTime / STEP_SECONDS) * 0.55) * 0.0012;
         const estimatedClose = Number(
-          (interpolatedYadio * bankPremiumRatio * (1 + hourWave)).toFixed(2)
+          (interpolatedYadio * bankPremiumRatio * (1 + fiveMinWave)).toFixed(2)
         );
         const prevClose = candles[i - 1]?.close ?? estimatedClose;
         const openVal = prevClose;
         const closeVal =
           bucketTime === currentHourBucket ? currentSellRate : estimatedClose;
 
-        const wickPadding = Math.max(0.35, Math.abs(closeVal - openVal) * 0.25);
-        const highVal = Number((Math.max(openVal, closeVal) + wickPadding).toFixed(2));
-        const lowVal = Number((Math.min(openVal, closeVal) - wickPadding).toFixed(2));
+        const wickPadding = Math.max(0.25, Math.abs(closeVal - openVal) * 0.25);
+        const highVal = Number(
+          (Math.max(openVal, closeVal) + wickPadding).toFixed(2)
+        );
+        const lowVal = Number(
+          (Math.min(openVal, closeVal) - wickPadding).toFixed(2)
+        );
         const buyVal = Number((closeVal * buySpreadRatio).toFixed(2));
 
         candles.push({
@@ -622,7 +641,7 @@ export class BinanceP2PLiveService {
     return {
       bankName: resolvedBankName,
       timeframe,
-      candleInterval: "1H",
+      candleInterval: "5M",
       timezone: "America/Caracas",
       currentHourVetLabel: shortHourVet,
       persistedCandlesCount,
@@ -634,8 +653,8 @@ export class BinanceP2PLiveService {
       currentSpreadPct,
       isLive: targetBank?.isLiveApi ?? true,
       benchmarkSource: targetBank?.isLiveApi
-        ? "Binance P2P C2C • Velas 1H (-4:00 UTC)"
-        : "CriptoYa API • Velas 1H (-4:00 UTC)",
+        ? "Binance P2P C2C • Intervalos de 5 min (-4:00 UTC)"
+        : "CriptoYa API • Intervalos de 5 min (-4:00 UTC)",
     };
   }
 }

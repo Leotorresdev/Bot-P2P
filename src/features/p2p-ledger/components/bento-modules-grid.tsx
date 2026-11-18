@@ -5,21 +5,27 @@ import {
   Activity,
   ArrowDownUp,
   Award,
+  BadgePercent,
   BarChart3,
   Building2,
   CalendarDays,
+  Check,
   CheckCircle2,
   Clock,
   FileSpreadsheet,
+  Pencil,
   RefreshCw,
   Scale,
   TrendingDown,
   TrendingUp,
+  X,
 } from "lucide-react";
 import {
   useMerchantBadgeQuery,
   useP2PSummaryQuery,
+  useTaxConfigQuery,
   useUpdateMerchantBadgeMutation,
+  useUpdateTaxConfigMutation,
   useVenezuelanBanksQuery,
 } from "@/features/p2p-ledger/api/use-p2p-queries";
 import { TradingViewP2PChart } from "@/features/p2p-ledger/components/tradingview-p2p-chart";
@@ -211,6 +217,8 @@ export function BentoModulesGrid({
   const [sellBrechaAmount, setSellBrechaAmount] =
     React.useState<number>(100_000);
   const [badgeFeedback, setBadgeFeedback] = React.useState<string | null>(null);
+  const [isEditingSeniat, setIsEditingSeniat] = React.useState(false);
+  const [seniatInput, setSeniatInput] = React.useState<string>("");
 
   const summaryQuery = useP2PSummaryQuery({
     period,
@@ -220,7 +228,9 @@ export function BentoModulesGrid({
   });
 
   const badgeQuery = useMerchantBadgeQuery();
+  const taxConfigQuery = useTaxConfigQuery();
   const updateBadgeMutation = useUpdateMerchantBadgeMutation();
+  const updateTaxConfigMutation = useUpdateTaxConfigMutation();
   const banksQuery = useVenezuelanBanksQuery(buyBrechaAmount, sellBrechaAmount);
 
   const summary = summaryQuery.data;
@@ -231,6 +241,9 @@ export function BentoModulesGrid({
   const activeBadge: MerchantBadgeType =
     badgeQuery.data?.badge ?? summary?.merchantBadge ?? "BRONZE";
   const activeBadgeMeta = MERCHANT_BADGE_META[activeBadge];
+  const currentSeniatPct =
+    taxConfigQuery.data?.seniatTaxPercent ??
+    (summary?.seniatTaxRatePercent ? Number(summary.seniatTaxRatePercent) : 16);
 
   const handleSelectBadge = async (badge: MerchantBadgeType) => {
     if (badge === activeBadge || updateBadgeMutation.isPending) return;
@@ -246,6 +259,29 @@ export function BentoModulesGrid({
     }
   };
 
+  const handleSaveSeniatRate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const parsed = Number(seniatInput);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 99) {
+      setBadgeFeedback("El % SENIAT debe estar entre 0 y 99.");
+      return;
+    }
+    setBadgeFeedback(null);
+    try {
+      await updateTaxConfigMutation.mutateAsync({
+        seniatTaxPercent: parsed,
+        makerFeePercent: activeBadgeMeta.feePercent,
+      });
+      setIsEditingSeniat(false);
+    } catch (error) {
+      setBadgeFeedback(
+        error instanceof Error
+          ? error.message
+          : "No se pudo actualizar el % SENIAT."
+      );
+    }
+  };
+
   const brechaPositive = isDecimalNonNegative(summary?.brechaPointsVes);
   const netPositive = !(summary?.isNetProfitNegative ?? false);
 
@@ -254,7 +290,7 @@ export function BentoModulesGrid({
       {/* ================================================================= */}
       {/* PANEL SUPERIOR DE CONTROL DE JORNADA (INICIAR / CERRAR / CIERRES) */}
       {/* ================================================================= */}
-      <ShiftControlPanel />
+      <ShiftControlPanel mode="FULL_RESULTS" />
 
       {/* ================================================================= */}
       {/* BARRA SUPERIOR PERSISTENTE: INSIGNIA + PERÍODO + PROMEDIO + CIERRE */}
@@ -299,6 +335,69 @@ export function BentoModulesGrid({
               );
             })}
           </div>
+
+          <div className="hidden h-5 w-px bg-slate-200 dark:bg-[#2B3139] sm:block" />
+
+          {/* Porcentaje SENIAT configurable para el Modo Contador */}
+          {isEditingSeniat ? (
+            <form
+              onSubmit={handleSaveSeniatRate}
+              className="inline-flex items-center gap-1 rounded-xl border border-amber-300 bg-amber-50 px-2 py-1 dark:border-[#FCD535]/40 dark:bg-[#1E2329]"
+            >
+              <BadgePercent className="h-3.5 w-3.5 text-amber-600 dark:text-[#FCD535]" />
+              <span className="text-[11px] font-bold text-slate-700 dark:text-[#EAECEF]">
+                SENIAT:
+              </span>
+              <input
+                type="number"
+                min={0}
+                max={99}
+                step="0.5"
+                value={seniatInput}
+                onChange={(e) => setSeniatInput(e.target.value)}
+                aria-label="Porcentaje SENIAT"
+                className="w-14 rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-center font-mono text-xs font-bold text-slate-900 focus:border-amber-500 focus:outline-none dark:border-[#2B3139] dark:bg-[#0B0E11] dark:text-[#EAECEF] dark:focus:border-[#FCD535]"
+              />
+              <span className="text-[11px] font-bold text-slate-500 dark:text-[#848E9C]">
+                %
+              </span>
+              <button
+                type="submit"
+                disabled={updateTaxConfigMutation.isPending}
+                title="Guardar porcentaje SENIAT"
+                className="rounded-lg bg-emerald-600 p-1 text-white transition hover:bg-emerald-700 disabled:opacity-60 dark:bg-[#0ECB81] dark:text-[#0B0E11]"
+              >
+                <Check className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditingSeniat(false);
+                  setBadgeFeedback(null);
+                }}
+                title="Cancelar"
+                className="rounded-lg p-1 text-slate-500 transition hover:bg-slate-200/70 dark:text-[#848E9C] dark:hover:bg-[#2B3139]"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setSeniatInput(String(currentSeniatPct));
+                setIsEditingSeniat(true);
+                setBadgeFeedback(null);
+              }}
+              title="Editar porcentaje SENIAT mostrado al Contador"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-bold text-slate-700 transition hover:border-amber-300 hover:bg-amber-50/70 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:hover:border-[#FCD535]/50"
+            >
+              <BadgePercent className="h-3.5 w-3.5 text-amber-600 dark:text-[#FCD535]" />
+              <span>SENIAT {currentSeniatPct}%</span>
+              <Pencil className="h-3 w-3 text-slate-400 dark:text-[#848E9C]" />
+            </button>
+          )}
+
           {badgeFeedback && (
             <span className="text-[11px] font-semibold text-rose-600 dark:text-[#F6465D]">
               {badgeFeedback}
@@ -492,8 +591,8 @@ export function BentoModulesGrid({
             </span>
           </div>
           <div className="mt-1.5 grid grid-cols-2 gap-2">
-            <div className="rounded-xl bg-rose-50/70 px-2 py-1 dark:bg-[#F6465D]/10">
-              <p className="text-[10px] font-bold text-rose-700 dark:text-[#F6465D]">
+            <div className="rounded-xl bg-emerald-50/70 px-2 py-1 dark:bg-[#0ECB81]/10">
+              <p className="text-[10px] font-bold text-emerald-700 dark:text-[#0ECB81]">
                 Prom. Venta
               </p>
               <p className="font-mono text-xs font-extrabold tabular-nums text-slate-900 dark:text-[#EAECEF]">
@@ -503,8 +602,8 @@ export function BentoModulesGrid({
                 Bs
               </p>
             </div>
-            <div className="rounded-xl bg-emerald-50/70 px-2 py-1 dark:bg-[#0ECB81]/10">
-              <p className="text-[10px] font-bold text-emerald-700 dark:text-[#0ECB81]">
+            <div className="rounded-xl bg-rose-50/70 px-2 py-1 dark:bg-[#F6465D]/10">
+              <p className="text-[10px] font-bold text-rose-700 dark:text-[#F6465D]">
                 Prom. Compra
               </p>
               <p className="font-mono text-xs font-extrabold tabular-nums text-slate-900 dark:text-[#EAECEF]">
@@ -685,22 +784,7 @@ export function BentoModulesGrid({
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <label className="flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50/50 px-2 py-1 text-[10px] font-bold text-emerald-800">
-                  <span>Compra Bs:</span>
-                  <input
-                    type="number"
-                    min={50}
-                    max={50_000_000}
-                    step={5000}
-                    value={buyBrechaAmount}
-                    onChange={(e) =>
-                      setBuyBrechaAmount(Math.max(50, Number(e.target.value) || 1000))
-                    }
-                    className="w-20 bg-transparent font-mono text-[11px] font-extrabold text-slate-900 focus:outline-none"
-                  />
-                </label>
-
-                <label className="flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50/50 px-2 py-1 text-[10px] font-bold text-rose-800">
+                <label className="flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50/70 px-2.5 py-1 text-[10px] font-extrabold text-emerald-800 dark:border-[#0ECB81]/45 dark:bg-[#0ECB81]/15 dark:text-[#0ECB81]">
                   <span>Venta Bs:</span>
                   <input
                     type="number"
@@ -711,7 +795,22 @@ export function BentoModulesGrid({
                     onChange={(e) =>
                       setSellBrechaAmount(Math.max(50, Number(e.target.value) || 1000))
                     }
-                    className="w-20 bg-transparent font-mono text-[11px] font-extrabold text-slate-900 focus:outline-none"
+                    className="w-20 bg-transparent font-mono text-[11px] font-extrabold text-slate-900 focus:outline-none dark:text-[#EAECEF]"
+                  />
+                </label>
+
+                <label className="flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50/70 px-2.5 py-1 text-[10px] font-extrabold text-rose-800 dark:border-[#F6465D]/45 dark:bg-[#F6465D]/15 dark:text-[#F6465D]">
+                  <span>Compra Bs:</span>
+                  <input
+                    type="number"
+                    min={50}
+                    max={50_000_000}
+                    step={5000}
+                    value={buyBrechaAmount}
+                    onChange={(e) =>
+                      setBuyBrechaAmount(Math.max(50, Number(e.target.value) || 1000))
+                    }
+                    className="w-20 bg-transparent font-mono text-[11px] font-extrabold text-slate-900 focus:outline-none dark:text-[#EAECEF]"
                   />
                 </label>
 
@@ -833,12 +932,12 @@ export function BentoModulesGrid({
                         </div>
                       </div>
 
-                      {/* Fila 3: Detalle de los 1eros Anuncios Venta y Compra */}
+                      {/* Fila 3: Detalle de los 1eros Anuncios Venta (Verde) y Compra (Rojo) */}
                       <div className="flex flex-col gap-1.5 rounded-lg border border-black/5 bg-white/80 p-2.5 text-[11px]">
                         <div className="flex flex-col gap-0.5">
                           <div className="flex items-center justify-between gap-2">
-                            <span className="flex items-center gap-1 font-extrabold text-rose-700">
-                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" />
+                            <span className="flex items-center gap-1 font-extrabold text-emerald-700">
+                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
                               <span>Venta (1ro):</span>
                             </span>
                             <span className="font-mono font-extrabold text-slate-900">
@@ -854,8 +953,8 @@ export function BentoModulesGrid({
 
                         <div className="flex flex-col gap-0.5 border-t border-black/5 pt-1.5">
                           <div className="flex items-center justify-between gap-2">
-                            <span className="flex items-center gap-1 font-extrabold text-emerald-700">
-                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+                            <span className="flex items-center gap-1 font-extrabold text-rose-700">
+                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" />
                               <span>Compra (1ro):</span>
                             </span>
                             <span className="font-mono font-extrabold text-slate-900">

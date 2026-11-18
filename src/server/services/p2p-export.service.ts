@@ -115,6 +115,7 @@ export async function buildClosingWorkbookXlsx(
     ["Ganancia Bruta de la Vuelta", `${s.grossProfitVes} Bs.`, "Equivalente Ganancia Bruta (USDT)", `${s.grossProfitUsdt} USDT`],
     [`Menos Comisión Insignia (${badgeMeta.feeLabel})`, `-${s.volumeCommissionUsdt} USDT`, "Equivalente Comisión (Bs.)", `-${s.volumeCommissionVes} Bs.`],
     ["GANANCIA NETA REAL FINAL", `${s.netProfitUsdt} USDT`, "GANANCIA NETA REAL (Bs.)", `${s.netProfitVes} Bs.`, true],
+    [`Provisión SENIAT (${s.seniatTaxRatePercent}% configurada)`, `${s.seniatTax16Ves} Bs.`, `Provisión SENIAT Equivalente (${s.seniatTaxRatePercent}%)`, `${s.seniatTax16Usdt} USDT`],
   ];
 
   let currentRowIdx = 3;
@@ -223,7 +224,7 @@ export async function buildClosingWorkbookXlsx(
       ws.mergeCells(`A${currentRowIdx}:K${currentRowIdx}`);
       const emptyCell = ws.getCell(`A${currentRowIdx}`);
       emptyCell.value =
-        "Sin Cierres Totales del Día registrados en este mes calendario.";
+        "Sin cierres de jornada individuales en este mes; el resumen y la Sección 3 reflejan las transacciones sincronizadas del mes.";
       emptyCell.font = { italic: true, size: 9.5, color: { argb: "FF64748B" } };
       emptyCell.alignment = {
         vertical: "middle",

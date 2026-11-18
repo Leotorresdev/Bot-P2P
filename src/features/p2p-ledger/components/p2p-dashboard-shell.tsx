@@ -62,7 +62,7 @@ export function P2PDashboardShell() {
         <AccountantTaxView />
       ) : (
         <div className="flex flex-col gap-3">
-          {/* Sub-navegación interna de Resultados: Operaciones/KPIs vs Conexión/Cierres */}
+          {/* Sub-navegación interna de Resultados: Operaciones/KPIs vs Conexión con Binance */}
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200/80 bg-white px-3.5 py-2 dark:border-[#2B3139] dark:bg-[#181A20]">
             <div className="flex items-center gap-1.5">
               <button
@@ -89,7 +89,7 @@ export function P2PDashboardShell() {
                 )}
               >
                 <KeyRound className="h-3.5 w-3.5" />
-                <span>Conexión Binance &amp; Cierres</span>
+                <span>Conexión con Binance</span>
               </button>
             </div>
             <span className="text-[11px] font-medium text-slate-500 dark:text-[#848E9C]">

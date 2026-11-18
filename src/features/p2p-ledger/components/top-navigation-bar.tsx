@@ -108,7 +108,7 @@ export function TopNavigationBar() {
             </div>
             <span className="text-[11px] font-medium text-slate-500 dark:text-[#848E9C]">
               {isAccountant
-                ? "Libros Contables BA VEN-NIF & Declaración de IVA (16%)"
+                ? "Libro Fiscal Mensual BA VEN-NIF & Provisión SENIAT"
                 : "Terminal de Brechas Bancarias & Bóveda Operativa"}
             </span>
           </div>
@@ -190,7 +190,7 @@ export function TopNavigationBar() {
         ) : (
           <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-1.5 text-xs font-bold text-amber-900 dark:border-[#FCD535]/30 dark:bg-[#FCD535]/10 dark:text-[#FCD535]">
             <FileCheck2 className="h-4 w-4 text-amber-600 dark:text-[#FCD535]" />
-            <span>Vista de Auditoría: Cierres 11:59 PM y Libros 16%</span>
+            <span>Vista de Auditoría: Libro Fiscal Mensual &amp; Provisión SENIAT</span>
           </div>
         )}
       </div>
@@ -262,53 +262,52 @@ export function TopNavigationBar() {
         {/* Acciones privadas solo visibles cuando Resultados está desbloqueado */}
         {isResultsUnlocked && (
           <>
-            <button
-              type="button"
-              onClick={() => {
-                if (isAccountant) {
-                  setActiveRole("OPERATOR");
-                } else {
-                  setUnlockAccountantModalOpen(true);
+            {(activeTab === "RESULTS" || isAccountant) && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (isAccountant) {
+                    setActiveRole("OPERATOR");
+                  } else {
+                    setUnlockAccountantModalOpen(true);
+                  }
+                }}
+                title={
+                  isAccountant
+                    ? "Bloquear vista fiscal y volver a tu panel de Dueño"
+                    : "Ingresar contraseña para mostrar la vista de Contador"
                 }
-              }}
-              title={
-                isAccountant
-                  ? "Bloquear vista fiscal y volver a tu panel de Dueño"
-                  : "Ingresar contraseña para mostrar la vista de Contador"
-              }
-              className={cn(
-                "flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold shadow-xs transition-all",
-                isAccountant
-                  ? "border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-[#0ECB81]/40 dark:bg-[#0ECB81]/15 dark:text-[#0ECB81]"
-                  : "border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 dark:border-[#FCD535]/40 dark:bg-[#FCD535]/10 dark:text-[#FCD535] dark:hover:bg-[#FCD535]/20"
-              )}
-            >
-              {isAccountant ? (
-                <>
-                  <ArrowRightLeft className="h-3.5 w-3.5" />
-                  <span>Modo Dueño</span>
-                </>
-              ) : (
-                <>
-                  <Lock className="h-3.5 w-3.5" />
-                  <span>Modo Contador</span>
-                </>
-              )}
-            </button>
+                className={cn(
+                  "flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold shadow-xs transition-all",
+                  isAccountant
+                    ? "border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:border-[#0ECB81]/40 dark:bg-[#0ECB81]/15 dark:text-[#0ECB81]"
+                    : "border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 dark:border-[#FCD535]/40 dark:bg-[#FCD535]/10 dark:text-[#FCD535] dark:hover:bg-[#FCD535]/20"
+                )}
+              >
+                {isAccountant ? (
+                  <>
+                    <ArrowRightLeft className="h-3.5 w-3.5" />
+                    <span>Modo Dueño</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock className="h-3.5 w-3.5" />
+                    <span>Modo Contador</span>
+                  </>
+                )}
+              </button>
+            )}
 
-            <button
-              type="button"
-              onClick={handleDownloadCsv}
-              className={cn(
-                "flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-extrabold shadow-sm transition-all active:scale-[0.99]",
-                isAccountant
-                  ? "bg-amber-600 text-white hover:bg-amber-500 dark:bg-[#FCD535] dark:text-[#0B0E11] dark:hover:bg-[#F0B90B]"
-                  : "bg-emerald-600 text-white hover:bg-emerald-500 dark:bg-[#FCD535] dark:text-[#0B0E11] dark:hover:bg-[#F0B90B]"
-              )}
-            >
-              <Download className="h-3.5 w-3.5" />
-              <span>Cierres (.XLSX/.PDF)</span>
-            </button>
+            {activeTab === "RESULTS" && !isAccountant && (
+              <button
+                type="button"
+                onClick={handleDownloadCsv}
+                className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-extrabold text-white shadow-sm transition-all hover:bg-emerald-500 active:scale-[0.99] dark:bg-[#FCD535] dark:text-[#0B0E11] dark:hover:bg-[#F0B90B]"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>Cierres (.XLSX/.PDF)</span>
+              </button>
+            )}
 
             <button
               type="button"

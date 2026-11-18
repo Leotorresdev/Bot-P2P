@@ -58,20 +58,19 @@ function makeKey(bankName: string, hourBucketUtc: number): string {
 }
 
 /**
- * Calcula la hora exacta truncada en horario fijo -4:00 UTC (Venezuela / VET).
- * Al ser -4:00 un múltiplo exacto de 3600s sin horario de verano, cada hora UTC
- * coincide exactamente con una hora en punto en -4:00 UTC (00:00 .. 23:00).
+ * Calcula el bloque de 5 minutos exacto truncado en horario fijo -4:00 UTC (Venezuela / VET).
+ * Cada vela representa 300 segundos (5 minutos: :00, :05, :10, ..., :55).
  */
 export function getVenezuelaHourBucket(nowMs: number = Date.now()): {
   readonly hourBucketUtc: number;
   readonly hourLabelVet: string;
   readonly shortHourVet: string;
 } {
-  const hourBucketUtc = Math.floor(nowMs / 3_600_000) * 3600;
-  const parts = getUtcMinus4Parts(hourBucketUtc);
+  const bucketUtc = Math.floor(nowMs / 300_000) * 300;
+  const parts = getUtcMinus4Parts(bucketUtc);
 
   return {
-    hourBucketUtc,
+    hourBucketUtc: bucketUtc,
     hourLabelVet: `${parts.dateIso} ${parts.hhMm} (-4:00 UTC)`,
     shortHourVet: `${parts.hhMm} (-4:00 UTC)`,
   };

@@ -120,7 +120,7 @@ export function useP2PChartDataQuery(
       const json = await res.json();
       return json.data;
     },
-    refetchInterval: 60_000,
+    refetchInterval: 20_000,
   });
 }
 
@@ -287,6 +287,28 @@ export function useSaveBinanceVaultMutation() {
           "error" in json && typeof json.error === "string"
             ? json.error
             : "No se pudo guardar la llave en la bóveda."
+        );
+      }
+      return json;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
+    },
+  });
+}
+
+export function useUnlinkBinanceVaultMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      const res = await apiClient.api.p2p.vault.$delete();
+      const json = await res.json();
+      if (!res.ok || "error" in json) {
+        throw new Error(
+          "error" in json && typeof json.error === "string"
+            ? json.error
+            : "No se pudo desvincular la cuenta de Binance."
         );
       }
       return json;

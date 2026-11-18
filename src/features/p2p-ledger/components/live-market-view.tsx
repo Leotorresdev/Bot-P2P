@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Building2, RefreshCw } from "lucide-react";
 import { useVenezuelanBanksQuery } from "@/features/p2p-ledger/api/use-p2p-queries";
+import { ShiftControlPanel } from "@/features/p2p-ledger/components/shift-control-panel";
 import { TradingViewP2PChart } from "@/features/p2p-ledger/components/tradingview-p2p-chart";
 import { formatDecimalWithCommas } from "@/lib/format-currency";
 import { cn } from "@/lib/utils";
@@ -206,112 +207,118 @@ export function LiveMarketView({
   };
 
   return (
-    <section className="grid grid-cols-1 items-start gap-3 lg:grid-cols-12">
-      {/* IZQUIERDA: Gráfica TradingView en Vivo (estática junto a las brechas) */}
-      <div className="lg:col-span-6">
-        <TradingViewP2PChart
-          selectedBank={effectiveSelectedBank}
-          onSelectBank={(bankName) => onSelectBank(bankName)}
-          height={470}
-          compact
-        />
-      </div>
+    <div className="flex flex-col gap-3.5">
+      {/* BARRA SUPERIOR DE TURNO PARA TRABAJADORES Y OPERADORES (INICIAR / CERRAR JORNADA) */}
+      <ShiftControlPanel mode="WORKER_BAR" />
 
-      {/* DERECHA: Monitor de Brechas en Vivo (7 Bancos Venezuela) sin scroll */}
-      <div className="rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs transition-colors dark:border-[#2B3139] dark:bg-[#181A20] lg:col-span-6">
-        <div className="flex flex-col gap-2.5 border-b border-slate-100 pb-3 dark:border-[#2B3139]">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700 dark:bg-[#FCD535]/10 dark:text-[#FCD535]">
-                <Building2 className="h-4 w-4" />
-              </div>
-              <div>
-                <h2 className="text-xs font-extrabold text-slate-900 dark:text-[#EAECEF]">
-                  Brechas en Vivo por Banco (Merchant Verificado)
-                </h2>
-                <p className="text-[10px] text-slate-500 dark:text-[#848E9C]">
-                  Clic en un banco para ver su gráfica horaria 24/7 (-4:00 UTC)
-                </p>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => void banksQuery.refetch()}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-bold text-slate-700 transition-colors hover:bg-slate-100 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:hover:border-[#FCD535]/50"
-              title="Actualizar cotizaciones Binance C2C"
-            >
-              <RefreshCw
-                className={cn(
-                  "h-3 w-3",
-                  banksQuery.isFetching &&
-                    "animate-spin text-emerald-600 dark:text-[#FCD535]"
-                )}
-              />
-              <span>Vivo</span>
-            </button>
-          </div>
-
-          {/* Filtros de Monto: Venta a la IZQUIERDA, Compra a la DERECHA + Sugeridos 20k/50k/100k */}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {/* Input VENTA (IZQUIERDA) */}
-              <label className="flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50/60 px-2 py-1 text-[10px] font-bold text-rose-800 transition-colors focus-within:border-rose-400 dark:border-[#F6465D]/40 dark:bg-[#F6465D]/10 dark:text-[#F6465D]">
-                <span>Venta Bs:</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={sellInputText}
-                  onChange={(e) => handleSellTextChange(e.target.value)}
-                  onBlur={handleSellBlur}
-                  placeholder="100000"
-                  className="w-20 bg-transparent font-mono text-[11px] font-extrabold tabular-nums text-slate-900 placeholder:text-slate-400 focus:outline-none dark:text-[#EAECEF]"
-                />
-              </label>
-
-              {/* Input COMPRA (DERECHA) */}
-              <label className="flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50/60 px-2 py-1 text-[10px] font-bold text-emerald-800 transition-colors focus-within:border-emerald-400 dark:border-[#0ECB81]/40 dark:bg-[#0ECB81]/10 dark:text-[#0ECB81]">
-                <span>Compra Bs:</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={buyInputText}
-                  onChange={(e) => handleBuyTextChange(e.target.value)}
-                  onBlur={handleBuyBlur}
-                  placeholder="100000"
-                  className="w-20 bg-transparent font-mono text-[11px] font-extrabold tabular-nums text-slate-900 placeholder:text-slate-400 focus:outline-none dark:text-[#EAECEF]"
-                />
-              </label>
-            </div>
-
-            {/* Montos sugeridos rápidos */}
-            <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 dark:border-[#2B3139] dark:bg-[#1E2329]">
-              <span className="px-1 text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-[#848E9C]">
-                Sug:
-              </span>
-              {SUGGESTED_AMOUNTS.map((preset) => {
-                const isActive =
-                  sellBrechaAmount === preset.value &&
-                  buyBrechaAmount === preset.value;
-                return (
-                  <button
-                    key={preset.label}
-                    type="button"
-                    onClick={() => handleApplySuggested(preset.value)}
-                    className={cn(
-                      "rounded-md px-2 py-0.5 font-mono text-[10px] font-bold tabular-nums transition-all",
-                      isActive
-                        ? "bg-slate-900 text-white shadow-xs dark:bg-[#FCD535] dark:text-[#0B0E11]"
-                        : "text-slate-600 hover:bg-white hover:text-slate-900 dark:text-[#848E9C] dark:hover:bg-[#2B3139] dark:hover:text-[#EAECEF]"
-                    )}
-                  >
-                    {preset.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+      <section className="grid grid-cols-1 items-start gap-3.5 lg:grid-cols-12">
+        {/* IZQUIERDA: Gráfica TradingView cada 5 minutos en Vivo */}
+        <div className="lg:col-span-6">
+          <TradingViewP2PChart
+            selectedBank={effectiveSelectedBank}
+            onSelectBank={(bankName) => onSelectBank(bankName)}
+            height={470}
+            compact
+          />
         </div>
+
+        {/* DERECHA: Monitor de Brechas en Vivo (7 Bancos Venezuela) */}
+        <div className="rounded-2xl border border-slate-200/90 bg-white p-4 shadow-xs transition-colors dark:border-[#2B3139] dark:bg-[#181A20] lg:col-span-6">
+          <div className="flex flex-col gap-3 border-b border-slate-100 pb-3.5 dark:border-[#2B3139]">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700 dark:bg-[#FCD535]/10 dark:text-[#FCD535]">
+                  <Building2 className="h-4 w-4" />
+                </div>
+                <div>
+                  <h2 className="text-xs font-extrabold text-slate-900 dark:text-[#EAECEF]">
+                    Brechas en Vivo por Banco (Merchant Verificado)
+                  </h2>
+                  <p className="text-[10px] text-slate-500 dark:text-[#848E9C]">
+                    Clic en un banco para ver su gráfica cada 5 min (-4:00 UTC)
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void banksQuery.refetch()}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-[10px] font-bold text-slate-700 transition-colors hover:bg-slate-100 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:hover:border-[#FCD535]/50"
+                title="Actualizar cotizaciones Binance C2C"
+              >
+                <RefreshCw
+                  className={cn(
+                    "h-3 w-3",
+                    banksQuery.isFetching &&
+                      "animate-spin text-emerald-600 dark:text-[#FCD535]"
+                  )}
+                />
+                <span>Actualizar Vivo</span>
+              </button>
+            </div>
+
+            {/* Filtros de Monto: Venta en VERDE, Compra en ROJO + Sugeridos 20k/50k/100k */}
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-100 bg-slate-50/60 p-2 dark:border-[#2B3139] dark:bg-[#0B0E11]/60">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Input VENTA (VERDE) */}
+                <label className="flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50/80 px-2.5 py-1.5 text-[11px] font-extrabold text-emerald-800 shadow-2xs transition-colors focus-within:border-emerald-500 focus-within:ring-1 focus-within:ring-emerald-500/30 dark:border-[#0ECB81]/50 dark:bg-[#0ECB81]/15 dark:text-[#0ECB81]">
+                  <span className="h-2 w-2 rounded-full bg-emerald-500 dark:bg-[#0ECB81]" />
+                  <span>Venta Bs:</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={sellInputText}
+                    onChange={(e) => handleSellTextChange(e.target.value)}
+                    onBlur={handleSellBlur}
+                    placeholder="100000"
+                    className="w-20 bg-transparent font-mono text-xs font-extrabold tabular-nums text-emerald-950 placeholder:text-emerald-400 focus:outline-none dark:text-[#EAECEF]"
+                  />
+                </label>
+
+                {/* Input COMPRA (ROJO) */}
+                <label className="flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-50/80 px-2.5 py-1.5 text-[11px] font-extrabold text-rose-800 shadow-2xs transition-colors focus-within:border-rose-500 focus-within:ring-1 focus-within:ring-rose-500/30 dark:border-[#F6465D]/50 dark:bg-[#F6465D]/15 dark:text-[#F6465D]">
+                  <span className="h-2 w-2 rounded-full bg-rose-500 dark:bg-[#F6465D]" />
+                  <span>Compra Bs:</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={buyInputText}
+                    onChange={(e) => handleBuyTextChange(e.target.value)}
+                    onBlur={handleBuyBlur}
+                    placeholder="100000"
+                    className="w-20 bg-transparent font-mono text-xs font-extrabold tabular-nums text-rose-950 placeholder:text-rose-400 focus:outline-none dark:text-[#EAECEF]"
+                  />
+                </label>
+              </div>
+
+              {/* Montos sugeridos rápidos */}
+              <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-0.5 dark:border-[#2B3139] dark:bg-[#1E2329]">
+                <span className="px-1.5 text-[9px] font-bold uppercase tracking-wider text-slate-400 dark:text-[#848E9C]">
+                  Monto:
+                </span>
+                {SUGGESTED_AMOUNTS.map((preset) => {
+                  const isActive =
+                    sellBrechaAmount === preset.value &&
+                    buyBrechaAmount === preset.value;
+                  return (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => handleApplySuggested(preset.value)}
+                      className={cn(
+                        "rounded-md px-2 py-0.5 font-mono text-[10px] font-bold tabular-nums transition-all",
+                        isActive
+                          ? "bg-slate-900 text-white shadow-xs dark:bg-[#FCD535] dark:text-[#0B0E11]"
+                          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-[#848E9C] dark:hover:bg-[#2B3139] dark:hover:text-[#EAECEF]"
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
 
         {/* Grid compacto de 7 Bancos (cabe completo sin scroll) */}
         <div className="pt-3">
@@ -416,10 +423,10 @@ export function LiveMarketView({
                       </span>
                     </div>
 
-                    {/* Fila 3: Venta y Compra compactos */}
+                    {/* Fila 3: Venta (Verde) y Compra (Rojo) compactos */}
                     <div className="flex flex-col gap-1 rounded-lg border border-black/5 bg-white/80 px-2 py-1.5 text-[10px] dark:border-[#2B3139] dark:bg-[#181A20]">
                       <div className="flex items-center justify-between gap-1">
-                        <span className="font-extrabold text-rose-700 dark:text-[#F6465D]">
+                        <span className="font-extrabold text-emerald-700 dark:text-[#0ECB81]">
                           Venta:
                         </span>
                         <span className="font-mono font-extrabold tabular-nums text-slate-900 dark:text-[#EAECEF]">
@@ -427,7 +434,7 @@ export function LiveMarketView({
                         </span>
                       </div>
                       <div className="flex items-center justify-between gap-1 border-t border-black/5 pt-1 dark:border-[#2B3139]">
-                        <span className="font-extrabold text-emerald-700 dark:text-[#0ECB81]">
+                        <span className="font-extrabold text-rose-700 dark:text-[#F6465D]">
                           Compra:
                         </span>
                         <span className="font-mono font-extrabold tabular-nums text-slate-900 dark:text-[#EAECEF]">
@@ -459,6 +466,7 @@ export function LiveMarketView({
           )}
         </div>
       </div>
-    </section>
+      </section>
+    </div>
   );
 }

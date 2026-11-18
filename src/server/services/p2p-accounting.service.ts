@@ -563,6 +563,11 @@ export function calculateVueltaSummary(params: {
   const netProfitUsdt = grossProfitUsdt.minus(volumeCommissionUsdt);
   const netProfitBs = grossProfitBs.minus(volumeCommissionBs);
 
+  // 7. Provisión SENIAT seleccionada por el dueño (solo lectura fiscal; no altera la Ganancia Neta operativa)
+  const seniatRateDec = new Decimal(seniatTaxPercent).div(100);
+  const seniatTaxUsdtDec = Decimal.max(0, netProfitUsdt).mul(seniatRateDec);
+  const seniatTaxBsDec = Decimal.max(0, netProfitBs).mul(seniatRateDec);
+
   const totalCompletedCount = completedSellCount + completedBuyCount;
 
   return {
@@ -607,11 +612,11 @@ export function calculateVueltaSummary(params: {
     totalOrdersInPeriod: orders.length,
     reconciledOrdersCount: totalCompletedCount,
 
-    // Campos compatibles para módulos auxiliares
+    // Campos compatibles para módulos auxiliares y Modo Contador
     netFreeProfitUsdt: netProfitUsdt.toFixed(2),
     netFreeProfitVes: formatDecimalMoney(netProfitBs, 2),
-    seniatTax16Usdt: "0.00",
-    seniatTax16Ves: "0.00",
+    seniatTax16Usdt: formatDecimalMoney(seniatTaxUsdtDec, 2),
+    seniatTax16Ves: formatDecimalMoney(seniatTaxBsDec, 2),
     seniatTaxRatePercent: String(seniatTaxPercent),
     makerFeeRatePercent: String(badgeMeta.feePercent),
     exemptCapitalUsdt: formatDecimalMoney(totalBoughtUsdt, 2),
@@ -754,6 +759,10 @@ export function buildAggregatedSummaryFromClosures(params: {
     }
   }
 
+  const seniatRateDec = new Decimal(seniatTaxPercent).div(100);
+  const seniatTaxUsdtDec = Decimal.max(0, netProfitUsdt).mul(seniatRateDec);
+  const seniatTaxBsDec = Decimal.max(0, netProfitBs).mul(seniatRateDec);
+
   return {
     period,
     periodLabel,
@@ -798,8 +807,8 @@ export function buildAggregatedSummaryFromClosures(params: {
 
     netFreeProfitUsdt: netProfitUsdt.toFixed(2),
     netFreeProfitVes: formatDecimalMoney(netProfitBs, 2),
-    seniatTax16Usdt: "0.00",
-    seniatTax16Ves: "0.00",
+    seniatTax16Usdt: formatDecimalMoney(seniatTaxUsdtDec, 2),
+    seniatTax16Ves: formatDecimalMoney(seniatTaxBsDec, 2),
     seniatTaxRatePercent: String(seniatTaxPercent),
     makerFeeRatePercent: String(badgeMeta.feePercent),
     exemptCapitalUsdt: formatDecimalMoney(totalBoughtUsdt, 2),
@@ -1825,7 +1834,8 @@ export class P2PAccountingService {
       }
     }
 
-    // 2. Reporte de Cierre del Mes Completo (MONTH) — Alimentado desde DailyTotalClosure
+    // 2. Reporte de Cierre / Libro Fiscal del Mes Completo (MONTH)
+    // Combina cierres diarios consolidados y todas las transacciones sincronizadas del mes desde la vinculación de Binance
     if (params.scope === "MONTH") {
       const targetMonth =
         params.month && /^\d{4}-\d{2}$/.test(params.month)
@@ -1833,30 +1843,61 @@ export class P2PAccountingService {
           : getCurrentVetMonthIso();
       const monthRange = getVetMonthRangeMs(targetMonth);
 
-      const dailyClosures =
-        await SupabaseVaultRepository.getDailyTotalClosuresByMonth(
+      const [dailyClosures, mirrorOrders] = await Promise.all([
+        SupabaseVaultRepository.getDailyTotalClosuresByMonth(
           params.userId,
           targetMonth
-        );
+        ),
+        this.getUserOrdersFromVaultOrBinance(params.userId, false, {
+          startMs: monthRange.startMs,
+          endMs: monthRange.endMs,
+        }),
+      ]);
 
-      const consolidatedOrders = mergeChronologicalOrders(
+      const monthMirrorOrders = mirrorOrders.filter(
+        (o) =>
+          o.createTimeMs >= monthRange.startMs &&
+          o.createTimeMs <= monthRange.endMs
+      );
+
+      const closureOrders = mergeChronologicalOrders(
         dailyClosures.map((d) => d.orders)
       );
+      const consolidatedOrders = mergeChronologicalOrders([
+        closureOrders,
+        monthMirrorOrders,
+      ]);
       const totalShiftsInMonth = dailyClosures.reduce(
         (acc, d) => acc + d.shiftsCount,
         0
       );
 
-      const periodLabel = `Cierre Mensual Consolidado: ${monthRange.labelEs} (${dailyClosures.length} ${dailyClosures.length === 1 ? "día cerrado" : "días cerrados"} · ${totalShiftsInMonth} ${totalShiftsInMonth === 1 ? "jornada" : "jornadas"})`;
+      const periodLabel =
+        dailyClosures.length > 0
+          ? `Libro Fiscal Mensual: ${monthRange.labelEs} (${consolidatedOrders.length} órdenes · ${dailyClosures.length} ${dailyClosures.length === 1 ? "día cerrado" : "días cerrados"} · ${totalShiftsInMonth} ${totalShiftsInMonth === 1 ? "jornada" : "jornadas"})`
+          : `Libro Fiscal Mensual: ${monthRange.labelEs} (${consolidatedOrders.length} órdenes registradas)`;
 
-      const summary = buildAggregatedSummaryFromClosures({
-        summaries: dailyClosures.map((d) => d.summary),
-        orders: consolidatedOrders,
-        period: "MONTH",
-        periodLabel,
-        badge: taxConfig.merchantBadge,
-        seniatTaxPercent: taxConfig.seniatTaxPercent,
-      });
+      const hasExtraSyncedOrders =
+        consolidatedOrders.length > closureOrders.length ||
+        dailyClosures.length === 0;
+
+      const summary = hasExtraSyncedOrders
+        ? calculateVueltaSummary({
+            orders: consolidatedOrders,
+            period: "MONTH",
+            periodLabel,
+            method: "FIFO",
+            badge: taxConfig.merchantBadge,
+            seniatTaxPercent: taxConfig.seniatTaxPercent,
+          })
+        : buildAggregatedSummaryFromClosures({
+            summaries: dailyClosures.map((d) => d.summary),
+            orders: consolidatedOrders,
+            period: "MONTH",
+            periodLabel,
+            badge: taxConfig.merchantBadge,
+            seniatTaxPercent: taxConfig.seniatTaxPercent,
+          });
 
       return {
         scope: "MONTH",
@@ -1938,6 +1979,7 @@ export class P2PAccountingService {
     readonly closings: readonly DailyClosingActaDto[];
     readonly vaultStatus: {
       readonly isConfigured: boolean;
+      readonly label: string;
       readonly apiKeyMasked: string;
       readonly isReadOnlyVerified: boolean;
       readonly withdrawalsBlocked: boolean;
@@ -1977,6 +2019,7 @@ export class P2PAccountingService {
       closings,
       vaultStatus: {
         isConfigured: Boolean(credential),
+        label: credential ? credential.label : "Sin cuenta vinculada",
         apiKeyMasked: credential
           ? credential.apiKeyMasked
           : "Sin llave API conectada",
@@ -2010,6 +2053,9 @@ export class P2PAccountingService {
       updatedAt: new Date().toISOString(),
     });
 
+    this.lastSyncTimestampByUser.delete(params.userId);
+    this.inFlightSyncByUser.delete(params.userId);
+
     return {
       label: params.label,
       apiKeyMasked: encrypted.apiKeyMasked,
@@ -2017,6 +2063,17 @@ export class P2PAccountingService {
       isReadOnlyVerified: true,
       withdrawalsBlocked: true,
       spotTradingBlocked: true,
+      updatedAtVet: formatVetOrderTimestamp(Date.now()).timeLabel,
+    };
+  }
+
+  public static async unlinkBinanceVaultCredentials(userId: string) {
+    this.lastSyncTimestampByUser.delete(userId);
+    this.inFlightSyncByUser.delete(userId);
+    await SupabaseVaultRepository.deleteBinanceCredentialAndOrders(userId);
+
+    return {
+      unlinked: true,
       updatedAtVet: formatVetOrderTimestamp(Date.now()).timeLabel,
     };
   }

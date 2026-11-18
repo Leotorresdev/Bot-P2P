@@ -437,6 +437,39 @@ export class SupabaseVaultRepository {
   }
 
   /**
+   * Desvincula la cuenta de Binance del usuario eliminando sus credenciales cifradas
+   * y el espejo temporal de órdenes sincronizadas (conserva insignia, cierres de jornada y actas).
+   */
+  public static async deleteBinanceCredentialAndOrders(
+    userId: string
+  ): Promise<void> {
+    try {
+      const currentTax = await this.getUserTaxConfig(userId);
+      await this.writeFallbackBadgeTaxToSupabase(
+        userId,
+        currentTax.merchantBadge,
+        currentTax.seniatTaxPercent
+      );
+    } catch {
+      // ignore
+    }
+
+    try {
+      await Promise.all([
+        supabase.from("api_credentials").delete().eq("user_id", userId),
+        supabase.from("p2p_orders").delete().eq("user_id", userId),
+      ]);
+    } catch {
+      // Fallback a bóveda local
+    }
+
+    const db = readLocalDb();
+    db.credentials = db.credentials.filter((c) => c.userId !== userId);
+    db.orders = db.orders.filter((o) => o.userId !== userId);
+    writeLocalDb(db);
+  }
+
+  /**
    * Obtiene las órdenes P2P reales guardadas del usuario en orden cronológico exacto (createTimeMs DESC).
    */
   public static async getUserOrders(

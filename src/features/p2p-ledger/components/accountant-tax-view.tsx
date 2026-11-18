@@ -2,26 +2,22 @@
 
 import * as React from "react";
 import {
-  FileSpreadsheet,
-  ShieldCheck,
-  Lock,
-  Download,
-  CalendarCheck,
-  PiggyBank,
-  Wallet,
-  CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  FileText,
   BadgePercent,
-  Landmark,
   Calendar,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  FileText,
+  Landmark,
+  Loader2,
+  Lock,
+  ShieldCheck,
   X,
 } from "lucide-react";
 import {
-  useDailyClosingsQuery,
   useP2POrdersQuery,
   useP2PSummaryQuery,
+  useTaxConfigQuery,
 } from "@/features/p2p-ledger/api/use-p2p-queries";
 import type { TradeTypeFilter } from "@/features/p2p-ledger/schemas/p2p.schemas";
 import {
@@ -38,313 +34,236 @@ import {
 } from "@/lib/format-currency";
 import { cn } from "@/lib/utils";
 
+const ORDERS_PER_PAGE = 50;
+
 export function AccountantTaxView() {
-  const closingsQuery = useDailyClosingsQuery();
-  const summaryQuery = useP2PSummaryQuery({ period: "TODAY", method: "FIFO" });
+  const [selectedMonth, setSelectedMonth] = React.useState<string>("");
   const [filterType, setFilterType] = React.useState<TradeTypeFilter>("ALL");
   const [dateFilter, setDateFilter] = React.useState<string>("");
   const [todayVeLabel, setTodayVeLabel] = React.useState<string>("");
   const [page, setPage] = React.useState<number>(1);
-  const [expandedClosingId, setExpandedClosingId] = React.useState<
-    string | null
-  >(null);
+  const [isDownloadingExcel, setIsDownloadingExcel] = React.useState(false);
+  const [downloadError, setDownloadError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
+    setSelectedMonth((prev) => prev || getCurrentVetMonthIso());
     setTodayVeLabel(formatDateIsoVe(getCurrentVetDateIso()));
   }, []);
 
+  const taxConfigQuery = useTaxConfigQuery();
+  const summaryQuery = useP2PSummaryQuery({
+    period: "MONTH",
+    method: "FIFO",
+    month: selectedMonth || undefined,
+  });
+
   const ordersQuery = useP2POrdersQuery({
-    period: dateFilter ? "DAY" : "ALL",
+    period: dateFilter ? "DAY" : "MONTH",
     tradeType: filterType,
     status: "ALL",
     date: dateFilter || undefined,
+    month: !dateFilter && selectedMonth ? selectedMonth : undefined,
     page,
-    limit: 50,
+    limit: ORDERS_PER_PAGE,
   });
 
-  const closings = closingsQuery.data?.closings ?? [];
-  const closingsData = closingsQuery.data;
   const summary = summaryQuery.data;
   const orders = ordersQuery.data?.items ?? [];
+  const totalCount = ordersQuery.data?.totalCount ?? orders.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / ORDERS_PER_PAGE));
 
-  const handleDownloadExcel = () => {
-    const url = dateFilter
-      ? `/api/p2p/export-closing?scope=DAY&date=${encodeURIComponent(dateFilter)}&format=xlsx`
-      : `/api/p2p/export-closing?scope=MONTH&month=${encodeURIComponent(getCurrentVetMonthIso())}&format=xlsx`;
-    window.location.href = url;
+  const configuredSeniatPct =
+    taxConfigQuery.data?.seniatTaxPercent ??
+    (summary?.seniatTaxRatePercent
+      ? Number(summary.seniatTaxRatePercent)
+      : 16);
+  const seniatRateLabel = Number.isFinite(configuredSeniatPct)
+    ? String(configuredSeniatPct)
+    : "16";
+
+  const effectiveMonth = selectedMonth || getCurrentVetMonthIso();
+
+  const monthChips = React.useMemo(() => {
+    const allDates = ordersQuery.data?.availableDates ?? [];
+    const targetSuffix = `/${effectiveMonth.slice(5, 7)}/${effectiveMonth.slice(0, 4)}`;
+    return allDates.filter((dateStr) => dateStr.endsWith(targetSuffix));
+  }, [ordersQuery.data?.availableDates, effectiveMonth]);
+
+  const handleDownloadMonthlyExcel = async () => {
+    setIsDownloadingExcel(true);
+    setDownloadError(null);
+    try {
+      const monthParam = effectiveMonth;
+      const url = `/api/p2p/export-closing?scope=MONTH&month=${encodeURIComponent(monthParam)}&format=xlsx`;
+      const res = await fetch(url, {
+        method: "GET",
+        credentials: "same-origin",
+      });
+      if (!res.ok) {
+        throw new Error("No se pudo generar el libro fiscal mensual en Excel.");
+      }
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = `Libro_Fiscal_Mensual_P2P_${monthParam}.xlsx`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      setDownloadError(
+        error instanceof Error
+          ? error.message
+          : "Error descargando el Libro Fiscal Mensual (.XLSX)."
+      );
+    } finally {
+      setIsDownloadingExcel(false);
+    }
   };
 
   return (
-    <div className="flex w-full flex-col gap-6">
-      {/* 1. Banner de Seguridad Zero-Trust para el Contador */}
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-amber-300/80 bg-gradient-to-r from-amber-50 via-amber-50/60 to-white p-5 shadow-sm">
-        <div className="flex items-start gap-3.5">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-500 text-white shadow-md shadow-amber-500/20">
-            <Lock className="h-5 w-5" />
-          </div>
-          <div className="flex flex-col gap-0.5">
-            <div className="flex items-center gap-2">
-              <span className="font-display text-base font-extrabold text-amber-950">
-                Portal de Auditoría Fiscal SENIAT (Rol Contador)
-              </span>
-              <span className="rounded-full border border-amber-300 bg-amber-100 px-2.5 py-0.5 text-[11px] font-extrabold text-amber-900">
-                BA VEN-NIF
-              </span>
+    <div className="flex w-full flex-col gap-5">
+      {/* 1. Cabecera Limpia: Rol Contador + Mes + Botón Único de Libro Fiscal Mensual (.XLSX) */}
+      <section className="flex flex-col gap-4 rounded-2xl border border-amber-200/90 bg-gradient-to-r from-amber-50/90 via-white to-white p-5 shadow-xs dark:border-[#FCD535]/25 dark:from-[#FCD535]/10 dark:via-[#181A20] dark:to-[#181A20]">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-start gap-3.5">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-500 text-white shadow-sm dark:bg-[#FCD535] dark:text-[#0B0E11]">
+              <Lock className="h-5 w-5" />
             </div>
-            <p className="text-xs leading-relaxed text-amber-800">
-              Acceso restringido para el cálculo y declaración de impuestos. Por
-              seguridad de la empresa, las claves API de Binance y las
-              herramientas operativas de trading no están expuestas en esta
-              sesión.
-            </p>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={handleDownloadExcel}
-          className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm shadow-emerald-600/20 transition-all hover:from-emerald-500 hover:to-teal-500"
-        >
-          <Download className="h-4 w-4" />
-          <span>Descargar Libro Fiscal (.XLSX)</span>
-        </button>
-      </div>
-
-      {/* 2. Cuadrícula de Resumen Impositivo del Mes */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        {/* Caja 1: Provisión Débito Fiscal SENIAT */}
-        <div className="flex flex-col justify-between gap-2 rounded-2xl border border-amber-200/90 bg-amber-50/60 p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-amber-900">
-              Provisión SENIAT ({summary?.seniatTaxRatePercent ?? "16"}%)
-            </span>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
-              <BadgePercent className="h-4 w-4" />
-            </div>
-          </div>
-          <div>
-            <div className="font-display text-2xl font-extrabold tracking-tight text-amber-700">
-              -${closingsData?.monthSeniatTax16Usdt ?? "0.00"}
-            </div>
-            <div className="text-xs font-bold text-amber-800">
-              {closingsData?.monthSeniatTax16Ves ?? "0.00"} Bs. a declarar
-            </div>
-          </div>
-          <span className="text-[11px] font-medium text-amber-800/80">
-            Calculado estrictamente sobre el margen comercial realizado
-          </span>
-        </div>
-
-        {/* Caja 2: Margen Bruto Realizado (Base Imponible) */}
-        <div className="flex flex-col justify-between gap-2 rounded-2xl border border-emerald-200/90 bg-emerald-50/60 p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-emerald-900">
-              Base Imponible Realizada
-            </span>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
-              <PiggyBank className="h-4 w-4" />
-            </div>
-          </div>
-          <div>
-            <div className="font-display text-2xl font-extrabold tracking-tight text-emerald-900">
-              +${closingsData?.monthGrossUsdt ?? "0.00"}
-            </div>
-            <div className="text-xs font-bold text-emerald-800">
-              {closingsData?.monthGrossVes ?? "0.00"} Bs. brutos
-            </div>
-          </div>
-          <span className="text-[11px] font-medium text-emerald-700/80">
-            Diferencia entre compra y venta antes de tributos
-          </span>
-        </div>
-
-        {/* Caja 3: Ganancia Neta Realizada */}
-        <div className="flex flex-col justify-between gap-2 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-700">
-              Utilidad Neta del Comercio
-            </span>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
-              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-            </div>
-          </div>
-          <div>
-            <div className="font-display text-2xl font-extrabold tracking-tight text-slate-900">
-              +${closingsData?.monthNetFreeUsdt ?? "0.00"}
-            </div>
-            <div className="text-xs font-bold text-slate-700">
-              {closingsData?.monthNetFreeVes ?? "0.00"} Bs. netos
-            </div>
-          </div>
-          <span className="text-[11px] font-medium text-slate-500">
-            Margen libre disponible para la empresa
-          </span>
-        </div>
-      </div>
-
-      {/* 3. Sección: Actas Diarias de Cierre a las 11:59 PM VET */}
-      <div className="flex w-full flex-col gap-4 rounded-2xl border border-slate-200/90 bg-white p-6 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-amber-200 bg-amber-50 text-amber-600">
-              <CalendarCheck className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-display text-lg font-extrabold text-slate-900">
-                  Actas Diarias de Cierre (11:59 PM VET)
-                </h3>
-                <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-extrabold text-amber-800">
-                  Inmutables
+            <div className="flex flex-col gap-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="font-display text-base font-extrabold text-slate-900 dark:text-[#EAECEF]">
+                  Portal Fiscal SENIAT (Modo Contador)
+                </h2>
+                <span className="rounded-full border border-amber-300 bg-amber-100 px-2.5 py-0.5 text-[11px] font-extrabold text-amber-900 dark:border-[#FCD535]/35 dark:bg-[#FCD535]/15 dark:text-[#FCD535]">
+                  Solo Lectura · BA VEN-NIF
                 </span>
               </div>
-              <p className="text-xs font-medium text-slate-500">
-                Cada medianoche se congela el inventario y se emite el acta
-                diaria con firma criptográfica SHA-256.
+              <p className="max-w-2xl text-xs leading-relaxed text-slate-600 dark:text-[#848E9C]">
+                Registra todas las transacciones y ganancias desde que se
+                vinculó la cuenta de Binance. Las claves API y herramientas
+                operativas permanecen ocultas por seguridad.
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-extrabold text-emerald-800 border border-emerald-200">
-              ✓ Cierres Conformes bajo BA VEN-NIF
-            </span>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <label className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF]">
+              <span className="text-[11px] text-slate-500 dark:text-[#848E9C]">
+                Mes:
+              </span>
+              <input
+                type="month"
+                value={effectiveMonth}
+                onChange={(e) => {
+                  setSelectedMonth(e.target.value);
+                  setDateFilter("");
+                  setPage(1);
+                }}
+                aria-label="Seleccionar mes fiscal"
+                className="cursor-pointer bg-transparent font-mono text-xs font-bold text-slate-900 focus:outline-none dark:text-[#EAECEF]"
+              />
+            </label>
+
+            <button
+              type="button"
+              onClick={handleDownloadMonthlyExcel}
+              disabled={isDownloadingExcel}
+              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-extrabold text-white shadow-sm transition-all hover:bg-emerald-700 disabled:opacity-60 dark:bg-[#FCD535] dark:text-[#0B0E11] dark:hover:bg-[#F0B90B]"
+            >
+              {isDownloadingExcel ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              <span>
+                {isDownloadingExcel
+                  ? "Generando Excel..."
+                  : "Descargar Libro Fiscal Mensual (.XLSX)"}
+              </span>
+            </button>
           </div>
         </div>
 
-        {/* Lista de Actas */}
-        <div className="flex flex-col gap-3">
-          {closings.map((closing) => {
-            const isExpanded = expandedClosingId === closing.id;
-            return (
-              <div
-                key={closing.id}
-                className={cn(
-                  "overflow-hidden rounded-xl border transition-all duration-150",
-                  isExpanded
-                    ? "border-amber-400 bg-amber-50/20 shadow-md"
-                    : "border-slate-200/80 bg-white hover:border-amber-300 hover:bg-slate-50/50"
-                )}
-              >
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onClick={() =>
-                    setExpandedClosingId(isExpanded ? null : closing.id)
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      setExpandedClosingId(isExpanded ? null : closing.id);
-                    }
-                  }}
-                  className="flex cursor-pointer flex-wrap items-center justify-between gap-3 px-4 py-3.5"
-                >
-                  <div className="flex w-[150px] shrink-0 flex-col gap-0.5">
-                    <span className="text-sm font-extrabold text-slate-900">
-                      {closing.closingDateLabel}
-                    </span>
-                    <span className="text-xs font-semibold text-amber-800">
-                      Cierre 11:59 PM VET
-                    </span>
-                  </div>
+        {downloadError && (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-xs font-semibold text-rose-700 dark:border-[#F6465D]/35 dark:bg-[#F6465D]/10 dark:text-[#F6465D]">
+            {downloadError}
+          </div>
+        )}
+      </section>
 
-                  <div className="flex w-[130px] shrink-0 flex-col gap-0.5">
-                    <span className="text-xs font-bold text-slate-800">
-                      {closing.reconciledOrders} Órdenes
-                    </span>
-                    <span className="text-xs font-medium text-slate-500">
-                      Volumen: ${closing.totalVolumeUsdt}
-                    </span>
-                  </div>
-
-                  <div className="flex w-[140px] shrink-0 flex-col gap-0.5">
-                    <span className="text-xs font-extrabold text-amber-700">
-                      Débito IVA: -${closing.seniatTax16Usdt}
-                    </span>
-                    <span className="text-xs font-bold text-amber-800">
-                      -{closing.seniatTax16Ves} Bs. (16%)
-                    </span>
-                  </div>
-
-                  <div className="flex w-[140px] shrink-0 flex-col items-end gap-0.5">
-                    <span className="text-sm font-extrabold text-emerald-700">
-                      +${closing.netFreeProfitUsdt} Libres
-                    </span>
-                    <span className="text-xs font-bold text-slate-700">
-                      +{closing.netFreeProfitVes} Bs.
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDownloadExcel();
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800"
-                    >
-                      <Download className="h-3.5 w-3.5 text-emerald-600" />
-                      <span>Acta .XLSX</span>
-                    </button>
-                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
-                      {isExpanded ? (
-                        <ChevronUp className="h-4 w-4" />
-                      ) : (
-                        <ChevronDown className="h-4 w-4" />
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {isExpanded && (
-                  <div className="border-t border-slate-100 bg-slate-50/70 px-5 py-3.5">
-                    <div className="flex flex-wrap items-center justify-between gap-4 text-xs">
-                      <div className="flex items-center gap-2 text-slate-700">
-                        <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                        <span>
-                          Hash de Integridad Criptográfica:{" "}
-                          <code className="rounded bg-white px-1.5 py-0.5 font-mono text-[11px] border border-slate-200">
-                            {closing.integrityHashSha256}
-                          </code>
-                        </span>
-                      </div>
-                      <span className="text-xs font-bold text-slate-600">
-                        Comprobante sellado a medianoche
-                      </span>
-                    </div>
-                  </div>
-                )}
+      {/* 2. Tarjeta Única: Provisión SENIAT Seleccionada por el Dueño */}
+      <section className="rounded-2xl border border-amber-200/90 bg-white p-5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20]">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-[#FCD535]/15 dark:text-[#FCD535]">
+              <BadgePercent className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-sm font-extrabold text-slate-900 dark:text-[#EAECEF]">
+                  Provisión SENIAT ({seniatRateLabel}%)
+                </h3>
+                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 dark:border-[#0ECB81]/30 dark:bg-[#0ECB81]/10 dark:text-[#0ECB81]">
+                  <ShieldCheck className="h-3 w-3" />
+                  Seleccionada por el dueño: {seniatRateLabel}%
+                </span>
               </div>
-            );
-          })}
-        </div>
-      </div>
+              <p className="mt-1 text-xs text-slate-500 dark:text-[#848E9C]">
+                Calculada sobre las ganancias realizadas del mes (
+                {summary?.periodLabel ?? effectiveMonth}) con las transacciones
+                guardadas desde la vinculación de Binance.
+              </p>
+            </div>
+          </div>
 
-      {/* 4. Sección: Libro Diario de Operaciones con Formato Fiscal */}
-      <div className="flex w-full flex-col gap-4 rounded-2xl border border-slate-200/90 bg-white p-6 shadow-sm">
-        <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2.5">
-              <h3 className="font-display text-lg font-extrabold text-slate-900">
-                Libro Diario de Conciliación Impositiva
-              </h3>
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-extrabold text-emerald-700">
-                {ordersQuery.data?.totalCount ?? orders.length} Comprobantes
+          {summaryQuery.isLoading ? (
+            <div className="flex flex-col items-end gap-2 animate-pulse">
+              <div className="h-7 w-32 rounded-lg bg-slate-200 dark:bg-[#1E2329]" />
+              <div className="h-4 w-40 rounded bg-slate-200 dark:bg-[#1E2329]" />
+            </div>
+          ) : (
+            <div className="flex flex-col items-start sm:items-end">
+              <div className="font-mono text-2xl font-extrabold tracking-tight tabular-nums text-amber-700 dark:text-[#FCD535]">
+                -{summary?.seniatTax16Usdt ?? "0.00"} USDT
+              </div>
+              <div className="font-mono text-xs font-bold tabular-nums text-slate-700 dark:text-[#EAECEF]">
+                {summary?.seniatTax16Ves ?? "0.00"} Bs. a declarar (
+                {seniatRateLabel}%)
+              </div>
+              <span className="mt-0.5 text-[11px] font-medium text-slate-500 dark:text-[#848E9C]">
+                {summary?.reconciledOrdersCount ?? 0} órdenes completadas de{" "}
+                {summary?.totalOrdersInPeriod ?? 0} registradas en el mes
               </span>
             </div>
-            <p className="text-xs font-medium text-slate-500">
-              Desglose contable con separación estricta de Capital Exento y
-              Margen Sujeto a Retención/IVA del 16%.
+          )}
+        </div>
+      </section>
+
+      {/* 3. Libro Diario de Conciliación Impositiva por Fechas */}
+      <section className="flex w-full flex-col gap-4 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20] sm:p-6">
+        <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 dark:border-[#2B3139] lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-col gap-1">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h3 className="font-display text-lg font-extrabold text-slate-900 dark:text-[#EAECEF]">
+                Libro Diario de Conciliación Impositiva
+              </h3>
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-extrabold text-emerald-700 dark:border-[#0ECB81]/30 dark:bg-[#0ECB81]/10 dark:text-[#0ECB81]">
+                {totalCount} Comprobantes
+              </span>
+            </div>
+            <p className="text-xs font-medium text-slate-500 dark:text-[#848E9C]">
+              Historial de operaciones sincronizadas desde Binance con desglose
+              cronológico y filtro por fechas VET (-04:00).
             </p>
           </div>
 
-          <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-100/80 p-1">
+          <div className="flex flex-wrap items-center gap-1 rounded-xl border border-slate-200 bg-slate-100/80 p-1 dark:border-[#2B3139] dark:bg-[#0B0E11]">
             {(
               [
                 { id: "ALL", label: "Todas las Operaciones" },
-                { id: "SELL", label: "Ventas (Débito IVA 16%)" },
+                { id: "SELL", label: `Ventas (Débito ${seniatRateLabel}%)` },
                 { id: "BUY", label: "Compras de Inventario" },
               ] as const satisfies readonly {
                 id: TradeTypeFilter;
@@ -363,8 +282,8 @@ export function AccountantTaxView() {
                   className={cn(
                     "rounded-lg px-3 py-1.5 text-xs font-bold transition-all",
                     isActive
-                      ? "bg-slate-900 text-white shadow-sm"
-                      : "text-slate-600 hover:text-slate-900"
+                      ? "bg-slate-900 text-white shadow-xs dark:bg-[#FCD535] dark:text-[#0B0E11]"
+                      : "text-slate-600 hover:text-slate-900 dark:text-[#848E9C] dark:hover:text-[#EAECEF]"
                   )}
                 >
                   {item.label}
@@ -375,11 +294,13 @@ export function AccountantTaxView() {
         </div>
 
         {/* Selector y Filtros por Fecha (Contador) */}
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200/60 bg-amber-50/40 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50/90 p-3 dark:border-[#2B3139] dark:bg-[#1E2329]">
           <div className="flex flex-wrap items-center gap-2.5">
-            <div className="flex items-center gap-2 rounded-lg border border-amber-300/80 bg-white px-3 py-1.5 shadow-xs">
-              <Calendar className="h-4 w-4 text-amber-700 shrink-0" />
-              <span className="text-xs font-bold text-amber-950">Fecha Fiscal:</span>
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 shadow-xs dark:border-[#2B3139] dark:bg-[#0B0E11]">
+              <Calendar className="h-4 w-4 shrink-0 text-amber-600 dark:text-[#FCD535]" />
+              <span className="text-xs font-bold text-slate-800 dark:text-[#EAECEF]">
+                Fecha Fiscal:
+              </span>
               <input
                 type="date"
                 value={dateFilter}
@@ -387,7 +308,8 @@ export function AccountantTaxView() {
                   setDateFilter(e.target.value);
                   setPage(1);
                 }}
-                className="bg-transparent text-xs font-semibold text-slate-800 focus:outline-none cursor-pointer"
+                aria-label="Filtrar por fecha fiscal"
+                className="cursor-pointer bg-transparent font-mono text-xs font-semibold text-slate-800 focus:outline-none dark:text-[#EAECEF]"
               />
               {dateFilter && (
                 <button
@@ -396,7 +318,7 @@ export function AccountantTaxView() {
                     setDateFilter("");
                     setPage(1);
                   }}
-                  className="text-slate-400 hover:text-slate-600 transition-colors ml-1"
+                  className="ml-1 text-slate-400 transition-colors hover:text-slate-600 dark:text-[#848E9C] dark:hover:text-[#EAECEF]"
                   title="Quitar filtro de fecha"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -415,18 +337,25 @@ export function AccountantTaxView() {
                 className={cn(
                   "rounded-lg px-2.5 py-1 text-xs font-bold transition-all",
                   !dateFilter
-                    ? "bg-amber-900 text-white shadow-sm"
-                    : "border border-amber-200 bg-white text-amber-900 hover:border-amber-300 hover:bg-amber-50"
+                    ? "bg-slate-900 text-white shadow-xs dark:bg-[#FCD535] dark:text-[#0B0E11]"
+                    : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 dark:border-[#2B3139] dark:bg-[#181A20] dark:text-[#EAECEF] dark:hover:bg-[#2B3139]"
                 )}
               >
-                Todas las Fechas
+                Todo el Mes
               </button>
 
-              {ordersQuery.data?.availableDates?.map((dateStr) => {
-                const [d, m, y] = dateStr.split("/");
-                const isoDate = `${y}-${m}-${d}`;
-                const isSelected = dateFilter === isoDate || dateFilter === dateStr;
-                const isToday = todayVeLabel !== "" && dateStr === todayVeLabel;
+              {monthChips.map((dateStr) => {
+                const parts = dateStr.split("/");
+                const d = parts[0] ?? "";
+                const m = parts[1] ?? "";
+                const y = parts[2] ?? "";
+                const isoDate = d && m && y ? `${y}-${m}-${d}` : "";
+                if (!isoDate) return null;
+
+                const isSelected =
+                  dateFilter === isoDate || dateFilter === dateStr;
+                const isToday =
+                  todayVeLabel !== "" && dateStr === todayVeLabel;
 
                 return (
                   <button
@@ -437,10 +366,10 @@ export function AccountantTaxView() {
                       setPage(1);
                     }}
                     className={cn(
-                      "rounded-lg px-2.5 py-1 text-xs font-bold transition-all flex items-center gap-1",
+                      "flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-bold transition-all",
                       isSelected
-                        ? "bg-amber-700 text-white shadow-sm"
-                        : "border border-amber-200 bg-white text-amber-900 hover:border-amber-300 hover:bg-amber-50"
+                        ? "bg-amber-600 text-white shadow-xs dark:bg-[#FCD535] dark:text-[#0B0E11]"
+                        : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 dark:border-[#2B3139] dark:bg-[#181A20] dark:text-[#EAECEF] dark:hover:bg-[#2B3139]"
                     )}
                   >
                     {isToday ? `🟢 Hoy (${dateStr})` : `📅 ${dateStr}`}
@@ -451,8 +380,12 @@ export function AccountantTaxView() {
           </div>
 
           {dateFilter && (
-            <span className="text-xs font-bold text-amber-900 bg-amber-100/90 border border-amber-300 px-2.5 py-1 rounded-lg">
-              Libro Diario del {dateFilter.includes("-") ? dateFilter.split("-").reverse().join("/") : dateFilter} ({ordersQuery.data?.totalCount ?? orders.length} registros)
+            <span className="rounded-lg border border-amber-300 bg-amber-100/90 px-2.5 py-1 text-xs font-bold text-amber-900 dark:border-[#FCD535]/35 dark:bg-[#FCD535]/15 dark:text-[#FCD535]">
+              Día{" "}
+              {dateFilter.includes("-")
+                ? dateFilter.split("-").reverse().join("/")
+                : dateFilter}{" "}
+              ({totalCount} registros)
             </span>
           )}
         </div>
@@ -460,8 +393,7 @@ export function AccountantTaxView() {
         {/* Tabla Contable Fiscal */}
         <div className="w-full overflow-x-auto">
           <div className="min-w-[1050px]">
-            {/* Encabezados Fiscales y Espejo Binance */}
-            <div className="grid grid-cols-12 items-center rounded-xl border border-slate-200/80 bg-slate-50/90 px-4 py-3 text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
+            <div className="grid grid-cols-12 items-center rounded-xl border border-slate-200/80 bg-slate-50/90 px-4 py-3 text-[11px] font-extrabold uppercase tracking-wider text-slate-500 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#848E9C]">
               <div className="col-span-3">Fecha VET / N° Orden y Anuncio</div>
               <div className="col-span-1">Tipo</div>
               <div className="col-span-2">Estado</div>
@@ -470,109 +402,143 @@ export function AccountantTaxView() {
               <div className="col-span-2 text-right">Monto Total (Bs.)</div>
             </div>
 
-            {/* Filas Contables Exactas */}
             <div className="mt-2 flex flex-col gap-2">
-              {orders.map((order) => {
-                const typeStyle = getTradeTypeBadgeStyle(order.tradeType);
-                const statusStyle = getStatusCategoryBadgeStyle(
-                  order.statusCategory
-                );
-                return (
+              {ordersQuery.isLoading ? (
+                Array.from({ length: 6 }).map((_, idx) => (
                   <div
-                    key={order.orderNumber}
-                    className="grid grid-cols-12 items-center rounded-xl border border-slate-200/70 bg-white px-4 py-3 text-xs"
-                  >
-                    {/* Comprobante / Hora VET */}
-                    <div className="col-span-3 flex flex-col gap-1">
-                      <span className="w-fit rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-extrabold text-amber-900">
-                        {order.timeVetLabel}
-                      </span>
-                      <span className="font-mono text-[11px] font-medium text-slate-500">
-                        Orden #{order.orderNumber} · Adv {order.advNo}
-                      </span>
-                    </div>
+                    key={idx}
+                    className="h-14 animate-pulse rounded-xl border border-slate-200/60 bg-slate-100 dark:border-[#2B3139] dark:bg-[#1E2329]"
+                  />
+                ))
+              ) : orders.length === 0 ? (
+                <div className="rounded-xl border border-slate-200/70 bg-slate-50/70 px-4 py-10 text-center text-xs font-semibold text-slate-500 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#848E9C]">
+                  No hay transacciones registradas para este filtro o período.
+                </div>
+              ) : (
+                orders.map((order) => {
+                  const typeStyle = getTradeTypeBadgeStyle(order.tradeType);
+                  const statusStyle = getStatusCategoryBadgeStyle(
+                    order.statusCategory
+                  );
+                  return (
+                    <div
+                      key={order.orderNumber}
+                      className="grid grid-cols-12 items-center rounded-xl border border-slate-200/70 bg-white px-4 py-3 text-xs transition-colors hover:bg-slate-50/80 dark:border-[#2B3139] dark:bg-[#0B0E11] dark:hover:bg-[#1E2329]"
+                    >
+                      {/* Comprobante / Hora VET */}
+                      <div className="col-span-3 flex flex-col gap-1">
+                        <span className="w-fit rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-extrabold text-amber-900 dark:border-[#FCD535]/30 dark:bg-[#FCD535]/10 dark:text-[#FCD535]">
+                          {order.timeVetLabel}
+                        </span>
+                        <span className="font-mono text-[11px] font-medium text-slate-500 dark:text-[#848E9C]">
+                          Orden #{order.orderNumber} · Adv {order.advNo || "-"}
+                        </span>
+                      </div>
 
-                    {/* Tipo */}
-                    <div className="col-span-1">
-                      <span
-                        className={cn(
-                          "rounded-md border px-2 py-0.5 text-[11px] font-extrabold",
-                          typeStyle.badgeClass
-                        )}
-                      >
-                        {typeStyle.label}
-                      </span>
-                    </div>
-
-                    {/* Estado */}
-                    <div className="col-span-2">
-                      <span
-                        className={cn(
-                          "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-bold",
-                          statusStyle.badgeClass
-                        )}
-                      >
+                      {/* Tipo */}
+                      <div className="col-span-1">
                         <span
                           className={cn(
-                            "h-1.5 w-1.5 rounded-full",
-                            statusStyle.dotClass
+                            "rounded-md border px-2 py-0.5 text-[11px] font-extrabold",
+                            typeStyle.badgeClass
                           )}
-                        />
-                        {order.statusLabel}
-                      </span>
-                    </div>
+                        >
+                          {typeStyle.label}
+                        </span>
+                      </div>
 
-                    {/* Banco */}
-                    <div className="col-span-2 flex items-center gap-1.5 font-bold text-slate-800">
-                      <Landmark className="h-3.5 w-3.5 text-slate-400" />
-                      <span>{order.payMethodName}</span>
-                    </div>
+                      {/* Estado */}
+                      <div className="col-span-2">
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-bold",
+                            statusStyle.badgeClass
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "h-1.5 w-1.5 rounded-full",
+                              statusStyle.dotClass
+                            )}
+                          />
+                          {order.statusLabel}
+                        </span>
+                      </div>
 
-                    {/* Tasa / Cantidad */}
-                    <div className="col-span-2 flex flex-col gap-0.5 font-mono">
-                      <span className="font-extrabold text-slate-900">
-                        {formatUsdtAmount(order.amountUsdt)}
-                      </span>
-                      <span className="text-[11px] text-slate-500">
-                        @ {formatDecimalWithCommas(order.unitPriceVes)} Bs/USDT
-                      </span>
-                    </div>
+                      {/* Banco */}
+                      <div className="col-span-2 flex items-center gap-1.5 font-bold text-slate-800 dark:text-[#EAECEF]">
+                        <Landmark className="h-3.5 w-3.5 text-slate-400 dark:text-[#848E9C]" />
+                        <span>{order.payMethodName}</span>
+                      </div>
 
-                    {/* Monto Total Facturado */}
-                    <div className="col-span-2 flex flex-col items-end gap-0.5 font-mono">
-                      <span className="text-sm font-extrabold text-slate-900">
-                        {formatVesAmount(order.totalPriceVes)}
-                      </span>
-                      <span className="text-[10px] font-semibold text-slate-500">
-                        {order.counterPartNickName}
-                      </span>
+                      {/* Tasa / Cantidad */}
+                      <div className="col-span-2 flex flex-col gap-0.5 font-mono">
+                        <span className="font-extrabold text-slate-900 dark:text-[#EAECEF]">
+                          {formatUsdtAmount(order.amountUsdt)}
+                        </span>
+                        <span className="text-[11px] text-slate-500 dark:text-[#848E9C]">
+                          @ {formatDecimalWithCommas(order.unitPriceVes)} Bs/USDT
+                        </span>
+                      </div>
+
+                      {/* Monto Total Facturado */}
+                      <div className="col-span-2 flex flex-col items-end gap-0.5 font-mono">
+                        <span className="text-sm font-extrabold text-slate-900 dark:text-[#EAECEF]">
+                          {formatVesAmount(order.totalPriceVes)}
+                        </span>
+                        <span className="text-[10px] font-semibold text-slate-500 dark:text-[#848E9C]">
+                          {order.counterPartNickName}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           </div>
         </div>
 
+        {/* Paginación si hay más de 50 comprobantes */}
+        {totalPages > 1 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
+            <span className="font-medium text-slate-500 dark:text-[#848E9C]">
+              Página {page} de {totalPages} ({totalCount} transacciones)
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:hover:bg-[#2B3139]"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+                <span>Anterior</span>
+              </button>
+              <button
+                type="button"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:hover:bg-[#2B3139]"
+              >
+                <span>Siguiente</span>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Pie del Libro */}
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50 px-4 py-3 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50 px-4 py-3 text-xs dark:border-[#2B3139] dark:bg-[#1E2329]">
           <div className="flex items-center gap-2">
-            <FileText className="h-4 w-4 text-emerald-600" />
-            <span className="font-bold text-slate-700">
-              Libro preparado conforme a normas contables venezolanas para
-              declaración quincenal / mensual de IVA.
+            <FileText className="h-4 w-4 text-emerald-600 dark:text-[#0ECB81]" />
+            <span className="font-semibold text-slate-700 dark:text-[#EAECEF]">
+              Libro fiscal mensual preparado con provisión SENIAT del{" "}
+              {seniatRateLabel}% sobre las operaciones sincronizadas desde
+              Binance.
             </span>
           </div>
-
-          <button
-            type="button"
-            onClick={handleDownloadExcel}
-            className="font-bold text-emerald-700 hover:text-emerald-900 hover:underline"
-          >
-            Descargar este libro en Excel (.XLSX) &rarr;
-          </button>
         </div>
-      </div>
+      </section>
     </div>
   );
 }

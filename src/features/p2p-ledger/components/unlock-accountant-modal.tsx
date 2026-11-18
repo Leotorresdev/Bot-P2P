@@ -10,6 +10,8 @@ export function UnlockAccountantModal() {
     isUnlockAccountantModalOpen,
     setUnlockAccountantModalOpen,
     setActiveRole,
+    setActiveTab,
+    setResultsUnlocked,
   } = useLedgerUiStore();
 
   const [password, setPassword] = React.useState("");
@@ -64,6 +66,8 @@ export function UnlockAccountantModal() {
       }
 
       setIsVerifying(false);
+      setActiveTab("RESULTS");
+      setResultsUnlocked(true);
       setActiveRole("AUDITOR_SENIAT");
       setUnlockAccountantModalOpen(false);
       setPassword("");
@@ -106,8 +110,8 @@ export function UnlockAccountantModal() {
               </h3>
             </div>
             <p className="text-xs leading-relaxed text-slate-500 dark:text-[#848E9C]">
-              Ingresa tu contraseña para mostrar únicamente los libros de IVA
-              (16%) y cierres de las 11:59 PM.
+              Ingresa tu contraseña para mostrar únicamente la provisión SENIAT
+              configurada y el libro fiscal mensual en Excel.
             </p>
           </div>
         </div>
@@ -119,7 +123,7 @@ export function UnlockAccountantModal() {
             <span>¿Qué verá tu contador en este modo?</span>
           </div>
           <ul className="ml-6 list-disc space-y-1 text-[11px] font-medium text-amber-900 dark:text-[#EAECEF]">
-            <li>Actas de cierre diario (11:59 PM) y descarga de Excel SENIAT.</li>
+            <li>Provisión SENIAT según el porcentaje elegido y descarga del Libro Fiscal Mensual (.XLSX).</li>
             <li>
               <strong>Oculto por seguridad:</strong> Tus claves API de Binance y
               configuración de cuenta quedan bloqueadas.

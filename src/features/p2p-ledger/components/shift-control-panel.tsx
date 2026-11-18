@@ -49,11 +49,18 @@ function formatElapsedDuration(startMs: number, nowMs: number): string {
   ].join(":");
 }
 
-export function ShiftControlPanel() {
+export interface ShiftControlPanelProps {
+  readonly mode?: "WORKER_BAR" | "FULL_RESULTS";
+}
+
+export function ShiftControlPanel({
+  mode = "FULL_RESULTS",
+}: ShiftControlPanelProps) {
+  const isWorkerBarOnly = mode === "WORKER_BAR";
   const [selectedHistoryDate, setSelectedHistoryDate] =
     React.useState<string>("");
   const [isClosuresDrawerOpen, setIsClosuresDrawerOpen] =
-    React.useState<boolean>(false);
+    React.useState<boolean>(mode === "FULL_RESULTS");
   const [expandedShiftOrdersId, setExpandedShiftOrdersId] = React.useState<
     string | null
   >(null);
@@ -326,35 +333,45 @@ export function ShiftControlPanel() {
             <span>Cerrar Jornada</span>
           </button>
 
-          {/* 3. Botón Desplegable "Mis Cierres de Hoy" */}
-          <button
-            type="button"
-            onClick={() => setIsClosuresDrawerOpen((prev) => !prev)}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-extrabold transition-all",
-              isClosuresDrawerOpen
-                ? "border-slate-900 bg-slate-900 text-white dark:border-[#FCD535] dark:bg-[#FCD535] dark:text-[#0B0E11]"
-                : "border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:hover:border-[#FCD535]/50"
-            )}
-          >
-            <History className="h-3.5 w-3.5" />
-            <span>Mis Cierres de Hoy</span>
-            <span
+          {/* 3. En Resultados: Botón Desplegable "Mis Cierres de Hoy" | En Gráficas: Indicador de turnos cerrados */}
+          {!isWorkerBarOnly ? (
+            <button
+              type="button"
+              onClick={() => setIsClosuresDrawerOpen((prev) => !prev)}
               className={cn(
-                "rounded-full px-1.5 py-0.5 font-mono text-[10px] font-extrabold tabular-nums",
+                "inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-extrabold transition-all",
                 isClosuresDrawerOpen
-                  ? "bg-white/20 text-white dark:bg-black/20 dark:text-[#0B0E11]"
-                  : "bg-emerald-100 text-emerald-800 dark:bg-[#0ECB81]/20 dark:text-[#0ECB81]"
+                  ? "border-slate-900 bg-slate-900 text-white dark:border-[#FCD535] dark:bg-[#FCD535] dark:text-[#0B0E11]"
+                  : "border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:hover:border-[#FCD535]/50"
               )}
             >
-              {todayShifts.length}
-            </span>
-            {isClosuresDrawerOpen ? (
-              <ChevronUp className="h-3.5 w-3.5" />
-            ) : (
-              <ChevronDown className="h-3.5 w-3.5" />
-            )}
-          </button>
+              <History className="h-3.5 w-3.5" />
+              <span>Mis Cierres de Hoy</span>
+              <span
+                className={cn(
+                  "rounded-full px-1.5 py-0.5 font-mono text-[10px] font-extrabold tabular-nums",
+                  isClosuresDrawerOpen
+                    ? "bg-white/20 text-white dark:bg-black/20 dark:text-[#0B0E11]"
+                    : "bg-emerald-100 text-emerald-800 dark:bg-[#0ECB81]/20 dark:text-[#0ECB81]"
+                )}
+              >
+                {todayShifts.length}
+              </span>
+              {isClosuresDrawerOpen ? (
+                <ChevronUp className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5" />
+              )}
+            </button>
+          ) : (
+            <div className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#848E9C]">
+              <History className="h-3.5 w-3.5 text-emerald-600 dark:text-[#FCD535]" />
+              <span>Cierres hoy:</span>
+              <span className="rounded-md bg-emerald-100 px-1.5 py-0.5 font-mono text-[11px] font-extrabold tabular-nums text-emerald-800 dark:bg-[#0ECB81]/20 dark:text-[#0ECB81]">
+                {todayShifts.length}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -384,8 +401,8 @@ export function ShiftControlPanel() {
         </div>
       )}
 
-      {/* SECCIÓN DESPLEGABLE: "MIS CIERRES DE HOY" (HISTORIAL DE JORNADAS Y CONSOLIDADO DEL DÍA) */}
-      {isClosuresDrawerOpen && (
+      {/* SECCIÓN DESPLEGABLE: "MIS CIERRES DE HOY" (Solo visible en la sección de Resultados) */}
+      {!isWorkerBarOnly && isClosuresDrawerOpen && (
         <div className="flex flex-col gap-3 rounded-2xl border border-slate-200/90 bg-white p-4 shadow-sm dark:border-[#2B3139] dark:bg-[#181A20]">
           {/* Cabecera con Selector de Fecha */}
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 dark:border-[#2B3139]">

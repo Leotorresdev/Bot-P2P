@@ -594,6 +594,35 @@ export const routes = baseApp
       );
     }
   )
+  .delete("/p2p/vault", async (c) => {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ error: "No autenticado. Inicia sesión en /login" }, 401);
+    }
+
+    if (user.role === "AUDITOR_SENIAT") {
+      return c.json(
+        {
+          error:
+            "Acceso denegado: El Modo Contador no tiene permisos sobre la Bóveda API de Binance.",
+        },
+        403
+      );
+    }
+
+    const result = await P2PAccountingService.unlinkBinanceVaultCredentials(
+      user.id
+    );
+
+    return c.json(
+      {
+        message:
+          "Cuenta de Binance desvinculada. Ya puedes vincular una nueva cuenta cuando desees.",
+        data: result,
+      },
+      200
+    );
+  })
   .get("/p2p/merchant-badge", async (c) => {
     const user = c.get("user");
     if (!user) {

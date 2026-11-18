@@ -1,708 +1,741 @@
 "use client";
 
-import * as React from "react";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
+import { useState, type FormEvent } from "react";
 import {
-  ShieldCheck,
-  KeyRound,
-  Lock,
-  CheckCircle2,
   AlertTriangle,
-  Ban,
-  Users,
-  CalendarCheck,
-  Download,
-  RefreshCw,
-  ChevronDown,
-  ChevronUp,
-  Sparkles,
+  BookOpen,
+  CheckCircle2,
   Eye,
+  EyeOff,
+  Info,
+  KeyRound,
+  Loader2,
+  Lock,
+  PlugZap,
+  RefreshCw,
+  ShieldCheck,
+  Unlink,
   UserCheck,
+  Users,
+  XCircle,
 } from "lucide-react";
 import {
   useDailyClosingsQuery,
   useSaveBinanceVaultMutation,
   useTestBinanceMutation,
+  useUnlinkBinanceVaultMutation,
 } from "@/features/p2p-ledger/api/use-p2p-queries";
 import {
   SaveBinanceVaultBodySchema,
   type SaveBinanceVaultInput,
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
 import { useLedgerUiStore } from "@/features/p2p-ledger/store/use-ledger-ui-store";
-import { ClosingExportPanel } from "@/features/p2p-ledger/components/closing-export-panel";
-import { cn } from "@/lib/utils";
+
+interface ActionFeedback {
+  readonly kind: "success" | "error" | "info";
+  readonly message: string;
+}
+
+const CONNECTION_STEPS = [
+  {
+    step: "1",
+    title: "Abre Gestión de API en Binance",
+    description:
+      "Inicia sesión en Binance, ve a Perfil → Gestión de API y presiona Crear API.",
+  },
+  {
+    step: "2",
+    title: "Elige API generada por el sistema",
+    description:
+      "Selecciona 'Generada por el sistema', asigna un nombre (ej. Bot P2P) y confirma tu 2FA.",
+  },
+  {
+    step: "3",
+    title: "Deja solo Habilitar lectura",
+    description:
+      "Verifica que únicamente esté marcado Habilitar lectura. Nunca actives retiros ni trading.",
+  },
+  {
+    step: "4",
+    title: "Pega tus claves y prueba",
+    description:
+      "Ingresa API Key y Secret Key aquí, guarda y pulsa Probar Conexión para verificar.",
+  },
+] as const;
 
 export function SecurityAndClosingsView() {
-  const {
-    activeRole,
-    setActiveRole,
-    setUnlockAccountantModalOpen,
-    setClosingExportModalOpen,
-  } = useLedgerUiStore();
-  const closingsQuery = useDailyClosingsQuery();
+  const { activeRole, setActiveRole, setUnlockAccountantModalOpen } =
+    useLedgerUiStore();
+
+  const { data: closingsData, isLoading: isVaultLoading } =
+    useDailyClosingsQuery();
   const saveVaultMutation = useSaveBinanceVaultMutation();
+  const unlinkVaultMutation = useUnlinkBinanceVaultMutation();
+  const testBinanceMutation = useTestBinanceMutation();
 
-  const [showUpdateForm, setShowUpdateForm] = React.useState(false);
-  const testMutation = useTestBinanceMutation();
-  const [testResult, setTestResult] = React.useState<{
-    success: boolean;
-    message: string;
-  } | null>(null);
-  const [expandedClosingId, setExpandedClosingId] = React.useState<
-    string | null
-  >(null);
+  const vaultStatus = closingsData?.vaultStatus;
+  const isConfigured = Boolean(vaultStatus?.isConfigured);
+  const isAccountantMode = activeRole === "AUDITOR_SENIAT";
 
-  const form = useForm<SaveBinanceVaultInput>({
-    resolver: zodResolver(SaveBinanceVaultBodySchema),
-    defaultValues: {
-      label: "Binance P2P Principal",
-      apiKey: "",
-      apiSecret: "",
-      confirmReadOnlyOnly: true,
-    },
-  });
+  const [formToggleOverride, setFormToggleOverride] = useState<boolean | null>(
+    null,
+  );
+  const [confirmUnlinkOpen, setConfirmUnlinkOpen] = useState(false);
 
-  const onSubmitVault = (values: SaveBinanceVaultInput) => {
-    saveVaultMutation.mutate(values, {
-      onSuccess: () => {
-        setShowUpdateForm(false);
-        form.reset();
-        setTestResult(null);
-      },
-    });
-  };
+  const [label, setLabel] = useState("Binance P2P Principal");
+  const [apiKey, setApiKey] = useState("");
+  const [apiSecret, setApiSecret] = useState("");
+  const [showApiSecret, setShowApiSecret] = useState(false);
+  const [confirmReadOnly, setConfirmReadOnly] = useState(true);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<ActionFeedback | null>(null);
 
-  const handleTestConnection = () => {
-    setTestResult(null);
-    testMutation.mutate(undefined, {
-      onSuccess: (res) => {
-        setTestResult({
-          success: true,
-          message: res.message,
+  const isFormOpen =
+    !isAccountantMode &&
+    (formToggleOverride ?? (!isVaultLoading && !isConfigured));
+
+  const isBusy =
+    saveVaultMutation.isPending ||
+    unlinkVaultMutation.isPending ||
+    testBinanceMutation.isPending;
+
+  async function handleSaveVault(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFormError(null);
+    setFeedback(null);
+
+    const candidate: Record<string, unknown> = {
+      label: label.trim() || "Binance P2P Principal",
+      apiKey: apiKey.trim(),
+      apiSecret: apiSecret.trim(),
+      confirmReadOnlyOnly: confirmReadOnly,
+    };
+
+    const parsed = SaveBinanceVaultBodySchema.safeParse(candidate);
+    if (!parsed.success) {
+      setFormError(
+        parsed.error.issues[0]?.message ??
+          "Revisa los datos ingresados antes de guardar.",
+      );
+      return;
+    }
+
+    const payload: SaveBinanceVaultInput = parsed.data;
+
+    try {
+      const response = await saveVaultMutation.mutateAsync(payload);
+      setApiKey("");
+      setApiSecret("");
+      setShowApiSecret(false);
+      setConfirmUnlinkOpen(false);
+      setFormToggleOverride(false);
+      setFeedback({
+        kind: "success",
+        message:
+          response.message ||
+          "Cuenta Binance vinculada y cifrada correctamente con AES-256-GCM.",
+      });
+    } catch (error) {
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo guardar la conexión con Binance.",
+      );
+    }
+  }
+
+  async function handleTestConnection() {
+    setFormError(null);
+    setFeedback(null);
+
+    try {
+      const response = await testBinanceMutation.mutateAsync();
+      if (response.data.success) {
+        setFeedback({
+          kind: "success",
+          message: response.data.message || response.message,
         });
-      },
-      onError: (err) => {
-        setTestResult({
-          success: false,
-          message: err.message,
+      } else {
+        setFeedback({
+          kind: "error",
+          message:
+            response.data.message ||
+            "Binance no respondió con éxito. Verifica tus claves y permisos de lectura.",
         });
-      },
-    });
-  };
+      }
+    } catch (error) {
+      setFeedback({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Error probando la conexión con Binance.",
+      });
+    }
+  }
 
-  const closingsData = closingsQuery.data;
+  async function handleConfirmUnlink() {
+    setFormError(null);
+    setFeedback(null);
+
+    try {
+      const response = await unlinkVaultMutation.mutateAsync();
+      setConfirmUnlinkOpen(false);
+      setApiKey("");
+      setApiSecret("");
+      setLabel("Binance P2P Principal");
+      setShowApiSecret(false);
+      setFormToggleOverride(true);
+      setFeedback({
+        kind: "info",
+        message:
+          response.message ||
+          "Cuenta Binance desvinculada. Ya puedes ingresar las claves de otra cuenta.",
+      });
+    } catch (error) {
+      setFeedback({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "No se pudo desvincular la cuenta de Binance.",
+      });
+    }
+  }
 
   return (
-    <div className="flex w-full flex-col gap-6">
-      {/* Grid Principal: Columna Izquierda (Conexión Binance + Accesos) | Columna Derecha (Cierres Diarios) */}
-      <div className="flex w-full flex-col gap-6 xl:flex-row xl:items-stretch">
-        {/* COLUMNA IZQUIERDA (620px en Desktop) */}
-        <div className="flex w-full flex-col gap-6 xl:w-[620px] xl:shrink-0">
-          {/* TARJETA 1: Conexión con tu Cuenta de Binance */}
-          <div className="flex flex-col gap-5 rounded-2xl border border-slate-200/90 bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        {/* Columna izquierda: Conexión con Binance + Personas con Acceso */}
+        <div className="space-y-6 lg:col-span-7">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20] sm:p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="flex items-center gap-3.5">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-md shadow-emerald-500/20">
-                  <KeyRound className="h-5 w-5" />
-                </div>
-                <div>
-                  <h2 className="font-display text-xl font-extrabold tracking-tight text-slate-900">
-                    Conexión con tu Binance
-                  </h2>
-                  <p className="text-xs font-medium text-slate-500">
-                    El bot solo lee tus órdenes para sacar cuentas. Tu dinero
-                    nunca se toca.
-                  </p>
+              <div>
+                <div className="flex items-center gap-2">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15 dark:text-[#0ECB81]">
+                    <KeyRound className="h-4.5 w-4.5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900 dark:text-[#EAECEF]">
+                      Conexión con tu Binance
+                    </h2>
+                    <p className="text-xs text-slate-500 dark:text-[#848E9C]">
+                      Sincronización automática de órdenes P2P con llaves de
+                      Solo Lectura
+                    </p>
+                  </div>
                 </div>
               </div>
 
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-extrabold text-emerald-700">
-                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                Conectado y Seguro
-              </span>
+              {isVaultLoading ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#848E9C]">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Verificando...
+                </span>
+              ) : isConfigured ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700 dark:border-[#0ECB81]/30 dark:bg-[#0ECB81]/10 dark:text-[#0ECB81]">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Conectado y Seguro
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-bold text-amber-700 dark:border-[#FCD535]/30 dark:bg-[#FCD535]/10 dark:text-[#FCD535]">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  Sin cuenta vinculada
+                </span>
+              )}
             </div>
 
-            {activeRole === "AUDITOR_SENIAT" ? (
-              <div className="flex items-start gap-3.5 rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
-                  <Lock className="h-5 w-5" />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <span className="text-sm font-extrabold text-amber-950">
-                    Estás viendo la pantalla como Contador
-                  </span>
-                  <span className="text-xs leading-relaxed text-amber-800">
-                    Por seguridad, tu contador no puede ver ni cambiar tus
-                    claves de Binance. Solo tiene permiso para descargar los
-                    cierres diarios de la derecha.
-                  </span>
+            {isAccountantMode ? (
+              <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50/70 p-4 dark:border-[#FCD535]/25 dark:bg-[#1E2329]">
+                <div className="flex items-start gap-3">
+                  <Lock className="mt-0.5 h-4.5 w-4.5 shrink-0 text-amber-600 dark:text-[#FCD535]" />
+                  <div>
+                    <p className="text-xs font-bold text-slate-900 dark:text-[#EAECEF]">
+                      Acceso restringido en Modo Contador
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-600 dark:text-[#848E9C]">
+                      Por seguridad Zero-Trust, el perfil de Contador no puede
+                      visualizar, editar ni desvincular claves API de Binance.
+                      Cambia a Dueño Principal para gestionar la conexión.
+                    </p>
+                  </div>
                 </div>
               </div>
             ) : (
               <>
-                {/* Estado de la Clave Conectada */}
-                <div className="flex flex-col gap-3 rounded-xl border border-slate-200/80 bg-slate-50/70 p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-col gap-0.5">
-                      <span className="text-xs font-bold text-slate-500">
-                        Tu Clave de Lectura (API Key)
-                      </span>
-                      <span className="text-sm font-extrabold tracking-tight text-slate-900">
-                        {saveVaultMutation.data?.data.apiKeyMasked ??
-                          closingsData?.vaultStatus?.apiKeyMasked ??
-                          "Sin llave API conectada"}
-                      </span>
+                {/* Estado de la cuenta actual */}
+                <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50/80 p-4 dark:border-[#2B3139] dark:bg-[#1E2329]">
+                  {isVaultLoading ? (
+                    <div className="space-y-2.5 animate-pulse">
+                      <div className="h-4 w-44 rounded bg-slate-200 dark:bg-[#2B3139]" />
+                      <div className="h-3.5 w-64 rounded bg-slate-200 dark:bg-[#2B3139]" />
                     </div>
+                  ) : isConfigured && vaultStatus ? (
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold tracking-wider text-slate-400 uppercase dark:text-[#848E9C]">
+                            Cuenta Vinculada
+                          </p>
+                          <p className="mt-0.5 text-sm font-bold text-slate-900 dark:text-[#EAECEF]">
+                            {vaultStatus.label || "Binance P2P Principal"}
+                          </p>
+                          <p className="mt-1 font-mono text-xs text-slate-500 dark:text-[#848E9C]">
+                            API Key: {vaultStatus.apiKeyMasked}
+                          </p>
+                        </div>
 
-                    <button
-                      type="button"
-                      onClick={handleTestConnection}
-                      disabled={testMutation.isPending}
-                      className={cn(
-                        "inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-all cursor-pointer",
-                        testResult?.success
-                          ? "border-emerald-300 bg-emerald-100 text-emerald-800"
-                          : testResult?.success === false
-                          ? "border-rose-300 bg-rose-50 text-rose-800"
-                          : "border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:bg-emerald-50"
-                      )}
-                    >
-                      <RefreshCw
-                        className={cn(
-                          "h-3.5 w-3.5",
-                          testResult?.success ? "text-emerald-600" : testResult?.success === false ? "text-rose-600" : "text-emerald-600",
-                          testMutation.isPending && "animate-spin"
-                        )}
-                      />
-                      <span>
-                        {testMutation.isPending
-                          ? "Comprobando en Binance..."
-                          : testResult?.success
-                          ? "¡Conexión Perfecta!"
-                          : "Probar Conexión Real"}
-                      </span>
-                    </button>
-                  </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={handleTestConnection}
+                            disabled={isBusy}
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-60 dark:border-[#0ECB81]/30 dark:bg-[#0ECB81]/15 dark:text-[#0ECB81] dark:hover:bg-[#0ECB81]/25"
+                          >
+                            {testBinanceMutation.isPending ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <PlugZap className="h-3.5 w-3.5" />
+                            )}
+                            Probar Conexión
+                          </button>
 
-                  {testResult && (
-                    <div
-                      className={cn(
-                        "rounded-lg p-2.5 text-xs font-semibold leading-relaxed border",
-                        testResult.success
-                          ? "bg-emerald-50 border-emerald-200 text-emerald-900"
-                          : "bg-rose-50 border-rose-200 text-rose-900"
-                      )}
-                    >
-                      {testResult.message}
-                    </div>
-                  )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setConfirmUnlinkOpen(false);
+                              setFormToggleOverride((prev) =>
+                                prev === null ? !isFormOpen : !prev,
+                              );
+                            }}
+                            disabled={isBusy}
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60 dark:border-[#2B3139] dark:bg-[#181A20] dark:text-[#EAECEF] dark:hover:bg-[#2B3139]"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                            {isFormOpen ? "Ocultar Formulario" : "Cambiar Claves"}
+                          </button>
 
-                  <div className="flex items-center justify-between border-t border-slate-200/70 pt-2.5 text-xs">
-                    <span className="font-medium text-slate-500">
-                      Clave Secreta:
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 font-bold text-emerald-700">
-                      <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                      Protegida bajo llave y oculta para siempre
-                    </span>
-                  </div>
-                </div>
-
-                {/* Semáforo Visual: Qué puede y qué NO puede hacer el bot */}
-                <div className="flex flex-col gap-2">
-                  <span className="text-xs font-extrabold text-slate-700">
-                    Permisos de seguridad de esta conexión:
-                  </span>
-
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    {/* Permitido */}
-                    <div className="flex flex-col gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3.5">
-                      <div className="flex items-center gap-1.5 text-xs font-extrabold text-emerald-700">
-                        <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
-                        <span>Permitido</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFeedback(null);
+                              setFormError(null);
+                              setConfirmUnlinkOpen((prev) => !prev);
+                            }}
+                            disabled={isBusy}
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-100 disabled:opacity-60 dark:border-[#F6465D]/35 dark:bg-[#F6465D]/12 dark:text-[#F6465D] dark:hover:bg-[#F6465D]/20"
+                          >
+                            <Unlink className="h-3.5 w-3.5" />
+                            Desvincular cuenta
+                          </button>
+                        </div>
                       </div>
-                      <span className="text-sm font-extrabold text-slate-900">
-                        Leer Órdenes P2P
-                      </span>
-                      <span className="text-[11px] font-medium text-slate-600">
-                        Solo mira tus compras y ventas para sumar ganancias.
-                      </span>
-                    </div>
 
-                    {/* Bloqueado 1 */}
-                    <div className="flex flex-col gap-1.5 rounded-xl border border-rose-200 bg-rose-50/50 p-3.5">
-                      <div className="flex items-center gap-1.5 text-xs font-extrabold text-rose-700">
-                        <Ban className="h-4 w-4 shrink-0 text-rose-600" />
-                        <span>Bloqueado</span>
+                      {/* Permisos verificados */}
+                      <div className="grid grid-cols-1 gap-2 border-t border-slate-200/80 pt-3 dark:border-[#2B3139] sm:grid-cols-3">
+                        <div className="flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-xs dark:bg-[#181A20]">
+                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-[#0ECB81]" />
+                          <span className="font-medium text-slate-700 dark:text-[#EAECEF]">
+                            Leer Órdenes P2P
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-xs dark:bg-[#181A20]">
+                          <XCircle className="h-3.5 w-3.5 shrink-0 text-rose-500 dark:text-[#F6465D]" />
+                          <span className="font-medium text-slate-500 dark:text-[#848E9C]">
+                            Retiros Bloqueados
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-xs dark:bg-[#181A20]">
+                          <XCircle className="h-3.5 w-3.5 shrink-0 text-rose-500 dark:text-[#F6465D]" />
+                          <span className="font-medium text-slate-500 dark:text-[#848E9C]">
+                            Trading Bloqueado
+                          </span>
+                        </div>
                       </div>
-                      <span className="text-sm font-extrabold text-slate-900">
-                        Retirar Dinero
-                      </span>
-                      <span className="text-[11px] font-medium text-slate-600">
-                        Es imposible sacar o mover tus USDT de Binance.
-                      </span>
                     </div>
-
-                    {/* Bloqueado 2 */}
-                    <div className="flex flex-col gap-1.5 rounded-xl border border-rose-200 bg-rose-50/50 p-3.5">
-                      <div className="flex items-center gap-1.5 text-xs font-extrabold text-rose-700">
-                        <Ban className="h-4 w-4 shrink-0 text-rose-600" />
-                        <span>Bloqueado</span>
-                      </div>
-                      <span className="text-sm font-extrabold text-slate-900">
-                        Hacer Trading
-                      </span>
-                      <span className="text-[11px] font-medium text-slate-600">
-                        No puede abrir órdenes ni tocar tu billetera.
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Botón o Formulario para cambiar las claves */}
-                <div>
-                  {!showUpdateForm ? (
-                    <button
-                      type="button"
-                      onClick={() => setShowUpdateForm(true)}
-                      className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs font-bold text-slate-700 transition-all hover:border-emerald-300 hover:bg-emerald-50/60 hover:text-slate-900"
-                    >
-                      <KeyRound className="h-4 w-4 text-emerald-600" />
-                      <span>Cambiar mis claves de Binance</span>
-                    </button>
                   ) : (
-                    <form
-                      onSubmit={form.handleSubmit(onSubmitVault)}
-                      className="flex flex-col gap-3.5 rounded-2xl border border-emerald-200 bg-emerald-50/30 p-4"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-extrabold text-slate-900">
-                          Conectar nuevas claves de Binance
-                        </span>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-slate-900 dark:text-[#EAECEF]">
+                          Ninguna cuenta de Binance conectada
+                        </p>
+                        <p className="mt-0.5 text-xs text-slate-500 dark:text-[#848E9C]">
+                          Vincula tu API Key de Solo Lectura abajo para activar
+                          la sincronización automática P2P.
+                        </p>
+                      </div>
+                      {!isFormOpen && (
                         <button
                           type="button"
-                          onClick={() => setShowUpdateForm(false)}
-                          className="text-xs font-bold text-slate-500 hover:text-slate-800"
+                          onClick={() => setFormToggleOverride(true)}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-[#FCD535] px-3.5 py-2 text-xs font-bold text-[#0B0E11] transition hover:brightness-95"
                         >
-                          Cancelar
+                          <KeyRound className="h-3.5 w-3.5" />
+                          Vincular Cuenta
                         </button>
-                      </div>
-
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-xs font-bold text-slate-700">
-                          1. Pega tu API Key de Binance
-                        </label>
-                        <input
-                          {...form.register("apiKey")}
-                          placeholder="Ejemplo: vmPUZE6mv9SD5VNHk4HlWFsOr6aKE2zv..."
-                          autoComplete="off"
-                          className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-xs font-medium text-slate-900 focus:border-emerald-500 focus:outline-none"
-                        />
-                        {form.formState.errors.apiKey && (
-                          <span className="text-xs font-bold text-rose-600">
-                            {form.formState.errors.apiKey.message}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-xs font-bold text-slate-700">
-                          2. Pega tu Secret Key
-                        </label>
-                        <input
-                          type="password"
-                          {...form.register("apiSecret")}
-                          placeholder="••••••••••••••••••••••••••••••••"
-                          autoComplete="off"
-                          className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-xs font-medium text-slate-900 focus:border-emerald-500 focus:outline-none"
-                        />
-                        {form.formState.errors.apiSecret && (
-                          <span className="text-xs font-bold text-rose-600">
-                            {form.formState.errors.apiSecret.message}
-                          </span>
-                        )}
-                      </div>
-
-                      {saveVaultMutation.isError && (
-                        <div className="flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700">
-                          <AlertTriangle className="h-4 w-4 shrink-0" />
-                          <span>{saveVaultMutation.error.message}</span>
-                        </div>
                       )}
-
-                      <div className="flex justify-end gap-2 pt-1">
-                        <button
-                          type="submit"
-                          disabled={saveVaultMutation.isPending}
-                          className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:bg-emerald-500 disabled:opacity-60"
-                        >
-                          {saveVaultMutation.isPending
-                            ? "Guardando de forma segura..."
-                            : "Guardar Nuevas Claves"}
-                        </button>
-                      </div>
-                    </form>
-                  )}
-
-                  {saveVaultMutation.isSuccess && !showUpdateForm && (
-                    <div className="mt-3 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs font-bold text-emerald-800">
-                      <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
-                      <span>
-                        ¡Claves actualizadas con éxito! (
-                        {saveVaultMutation.data.data.apiKeyMasked})
-                      </span>
                     </div>
                   )}
                 </div>
+
+                {/* Confirmación segura para desvincular cuenta */}
+                {confirmUnlinkOpen && isConfigured && (
+                  <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50/90 p-4 dark:border-[#F6465D]/40 dark:bg-[#F6465D]/10">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle className="mt-0.5 h-4.5 w-4.5 shrink-0 text-rose-600 dark:text-[#F6465D]" />
+                      <div className="flex-1">
+                        <p className="text-xs font-bold text-rose-900 dark:text-[#EAECEF]">
+                          ¿Desvincular{" "}
+                          {vaultStatus?.label ?? "esta cuenta de Binance"}?
+                        </p>
+                        <p className="mt-1 text-xs leading-relaxed text-rose-700 dark:text-[#EAECEF]/80">
+                          Se eliminarán las credenciales guardadas y las órdenes
+                          en vivo sincronizadas de esta cuenta para evitar
+                          mezclas al vincular otra. Tus cierres de jornada y
+                          reportes guardados permanecerán intactos.
+                        </p>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={handleConfirmUnlink}
+                            disabled={unlinkVaultMutation.isPending}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3.5 py-2 text-xs font-bold text-white transition hover:bg-rose-700 disabled:opacity-60 dark:bg-[#F6465D] dark:hover:bg-[#e03a50]"
+                          >
+                            {unlinkVaultMutation.isPending ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Unlink className="h-3.5 w-3.5" />
+                            )}
+                            Confirmar desvinculación
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmUnlinkOpen(false)}
+                            disabled={unlinkVaultMutation.isPending}
+                            className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:hover:bg-[#2B3139]"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Mensajes de estado (prueba de conexión / guardado / desvinculado) */}
+                {feedback && (
+                  <div
+                    className={`mt-4 flex items-start gap-2.5 rounded-xl border px-3.5 py-3 text-xs font-medium ${
+                      feedback.kind === "success"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-[#0ECB81]/35 dark:bg-[#0ECB81]/10 dark:text-[#0ECB81]"
+                        : feedback.kind === "error"
+                          ? "border-rose-200 bg-rose-50 text-rose-800 dark:border-[#F6465D]/35 dark:bg-[#F6465D]/10 dark:text-[#F6465D]"
+                          : "border-amber-200 bg-amber-50 text-amber-800 dark:border-[#FCD535]/35 dark:bg-[#FCD535]/10 dark:text-[#FCD535]"
+                    }`}
+                  >
+                    {feedback.kind === "success" ? (
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                    ) : feedback.kind === "error" ? (
+                      <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    ) : (
+                      <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                    )}
+                    <span>{feedback.message}</span>
+                  </div>
+                )}
+
+                {/* Formulario para vincular o actualizar claves */}
+                {isFormOpen && (
+                  <form
+                    onSubmit={handleSaveVault}
+                    className="mt-5 space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-[#2B3139] dark:bg-[#1E2329]"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-xs font-bold tracking-wide text-slate-800 uppercase dark:text-[#EAECEF]">
+                        {isConfigured
+                          ? "Actualizar Claves API de Binance"
+                          : "Vincular Nueva Cuenta Binance"}
+                      </h3>
+                      {isConfigured && (
+                        <button
+                          type="button"
+                          onClick={() => setFormToggleOverride(false)}
+                          className="text-xs font-semibold text-slate-500 hover:text-slate-700 dark:text-[#848E9C] dark:hover:text-[#EAECEF]"
+                        >
+                          Cerrar
+                        </button>
+                      )}
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="binance-vault-label"
+                        className="block text-[11px] font-semibold text-slate-600 dark:text-[#848E9C]"
+                      >
+                        Nombre identificador de la cuenta
+                      </label>
+                      <input
+                        id="binance-vault-label"
+                        type="text"
+                        value={label}
+                        onChange={(e) => setLabel(e.target.value)}
+                        placeholder="Ej. Binance P2P Principal"
+                        className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-900 focus:border-emerald-500 focus:outline-none dark:border-[#2B3139] dark:bg-[#0B0E11] dark:text-[#EAECEF] dark:placeholder-[#848E9C]/60 dark:focus:border-[#FCD535]"
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="binance-api-key"
+                        className="block text-[11px] font-semibold text-slate-600 dark:text-[#848E9C]"
+                      >
+                        Binance API Key (Solo Lectura)
+                      </label>
+                      <input
+                        id="binance-api-key"
+                        type="text"
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        placeholder="Pega aquí tu API Key alfanumérica (32-128 caracteres)"
+                        className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-xs text-slate-900 focus:border-emerald-500 focus:outline-none dark:border-[#2B3139] dark:bg-[#0B0E11] dark:text-[#EAECEF] dark:placeholder-[#848E9C]/60 dark:focus:border-[#FCD535]"
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="binance-api-secret"
+                        className="block text-[11px] font-semibold text-slate-600 dark:text-[#848E9C]"
+                      >
+                        Binance Secret Key
+                      </label>
+                      <div className="relative mt-1.5">
+                        <input
+                          id="binance-api-secret"
+                          type={showApiSecret ? "text" : "password"}
+                          autoComplete="off"
+                          spellCheck={false}
+                          value={apiSecret}
+                          onChange={(e) => setApiSecret(e.target.value)}
+                          placeholder="Se cifra en servidor con AES-256-GCM y nunca vuelve al navegador"
+                          className="w-full rounded-xl border border-slate-200 bg-white py-2 pr-10 pl-3 font-mono text-xs text-slate-900 focus:border-emerald-500 focus:outline-none dark:border-[#2B3139] dark:bg-[#0B0E11] dark:text-[#EAECEF] dark:placeholder-[#848E9C]/60 dark:focus:border-[#FCD535]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowApiSecret((prev) => !prev)}
+                          aria-label={
+                            showApiSecret
+                              ? "Ocultar Secret Key"
+                              : "Mostrar Secret Key"
+                          }
+                          className="absolute inset-y-0 right-2 flex items-center px-1.5 text-slate-400 hover:text-slate-600 dark:text-[#848E9C] dark:hover:text-[#EAECEF]"
+                        >
+                          {showApiSecret ? (
+                            <EyeOff className="h-4 w-4" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-700 dark:border-[#2B3139] dark:bg-[#181A20] dark:text-[#EAECEF]">
+                      <input
+                        type="checkbox"
+                        checked={confirmReadOnly}
+                        onChange={(e) => setConfirmReadOnly(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-[#2B3139] dark:bg-[#0B0E11]"
+                      />
+                      <span>
+                        Confirmo que esta API Key fue configurada con permiso
+                        único de <strong>Habilitar lectura (Read-Only)</strong>{" "}
+                        y tiene retiros y trading desactivados.
+                      </span>
+                    </label>
+
+                    {formError && (
+                      <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs font-medium text-rose-700 dark:border-[#F6465D]/35 dark:bg-[#F6465D]/10 dark:text-[#F6465D]">
+                        <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>{formError}</span>
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                      <button
+                        type="submit"
+                        disabled={saveVaultMutation.isPending}
+                        className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-700 disabled:opacity-60 dark:bg-[#FCD535] dark:text-[#0B0E11] dark:hover:brightness-95"
+                      >
+                        {saveVaultMutation.isPending ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <ShieldCheck className="h-3.5 w-3.5" />
+                        )}
+                        Guardar y Vincular Cuenta
+                      </button>
+                    </div>
+                  </form>
+                )}
               </>
             )}
-          </div>
+          </section>
 
-          {/* TARJETA 2: Quién Puede Entrar al Sistema (Tú vs Tu Contador) */}
-          <div className="flex flex-col gap-4 rounded-2xl border border-slate-200/90 bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+          {/* Personas con Acceso (Modo Dueño vs Modo Contador) */}
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20] sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-blue-200 bg-blue-50 text-blue-600">
-                  <Users className="h-5 w-5" />
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-[#1E2329] dark:text-[#FCD535]">
+                  <Users className="h-4.5 w-4.5" />
                 </div>
                 <div>
-                  <h2 className="font-display text-lg font-extrabold text-slate-900">
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-[#EAECEF]">
                     Personas con Acceso
-                  </h2>
-                  <p className="text-xs font-medium text-slate-500">
-                    Tú ves todo el negocio; tu contador solo descarga los
-                    reportes
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-[#848E9C]">
+                    Cambia entre vista administrativa completa y modo contador
+                    de solo lectura
                   </p>
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  if (activeRole === "OPERATOR") {
-                    setUnlockAccountantModalOpen(true);
-                  } else {
-                    setActiveRole("OPERATOR");
-                  }
-                }}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-bold text-white shadow-sm transition-all hover:bg-slate-800"
-              >
-                <Lock className="h-3.5 w-3.5 text-emerald-400" />
-                <span>
-                  {activeRole === "OPERATOR"
-                    ? "Activar Modo Contador (Con Contraseña)"
-                    : "Volver a mi vista de Dueño"}
-                </span>
-              </button>
+              {isAccountantMode ? (
+                <button
+                  type="button"
+                  onClick={() => setUnlockAccountantModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-bold text-white transition hover:bg-slate-800 dark:bg-[#FCD535] dark:text-[#0B0E11] dark:hover:brightness-95"
+                >
+                  <Lock className="h-3.5 w-3.5" />
+                  Desbloquear Modo Dueño
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setActiveRole("AUDITOR_SENIAT")}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-100 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:hover:bg-[#2B3139]"
+                >
+                  <UserCheck className="h-3.5 w-3.5" />
+                  Activar Modo Contador
+                </button>
+              )}
             </div>
 
-            <div className="flex flex-col gap-3">
-              {/* Perfil 1: Dueño */}
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div
-                className={cn(
-                  "flex items-center justify-between rounded-xl border p-3.5 transition-all",
-                  activeRole === "OPERATOR"
-                    ? "border-emerald-300 bg-emerald-50/40 ring-1 ring-emerald-400"
-                    : "border-slate-200 bg-slate-50/60"
-                )}
+                className={`rounded-xl border p-3.5 transition ${
+                  !isAccountantMode
+                    ? "border-emerald-300 bg-emerald-50/60 dark:border-[#0ECB81]/40 dark:bg-[#0ECB81]/10"
+                    : "border-slate-200 bg-slate-50/70 dark:border-[#2B3139] dark:bg-[#1E2329]"
+                }`}
               >
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-600 text-xs font-extrabold text-white">
-                    TÚ
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-sm font-extrabold text-slate-900">
-                      {closingsData?.userName
-                        ? `${closingsData.userName} (Dueño Principal)`
-                        : "Dueño Principal"}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-slate-900 dark:text-[#EAECEF]">
+                    Dueño Principal
+                  </span>
+                  {!isAccountantMode && (
+                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-[#0ECB81]/20 dark:text-[#0ECB81]">
+                      Activo
                     </span>
-                    <span className="text-xs font-medium text-slate-500">
-                      Control total de ganancias, bancos y claves de Binance
-                    </span>
-                  </div>
+                  )}
                 </div>
-                <span className="rounded-full border border-emerald-200 bg-emerald-100 px-3 py-1 text-xs font-extrabold text-emerald-800">
-                  Dueño
-                </span>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600 dark:text-[#848E9C]">
+                  Acceso total a conexión Binance, jornadas, libro operativo y
+                  exportación de cierres.
+                </p>
               </div>
 
-              {/* Perfil 2: Contador */}
               <div
-                className={cn(
-                  "flex items-center justify-between rounded-xl border p-3.5 transition-all",
-                  activeRole === "AUDITOR_SENIAT"
-                    ? "border-amber-300 bg-amber-50/50 ring-1 ring-amber-400"
-                    : "border-slate-200 bg-slate-50/60"
-                )}
+                className={`rounded-xl border p-3.5 transition ${
+                  isAccountantMode
+                    ? "border-amber-300 bg-amber-50/60 dark:border-[#FCD535]/40 dark:bg-[#FCD535]/10"
+                    : "border-slate-200 bg-slate-50/70 dark:border-[#2B3139] dark:bg-[#1E2329]"
+                }`}
               >
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500 text-xs font-extrabold text-white">
-                    CT
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-sm font-extrabold text-slate-900">
-                      Contador
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-slate-900 dark:text-[#EAECEF]">
+                    Contador SENIAT
+                  </span>
+                  {isAccountantMode && (
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 dark:bg-[#FCD535]/20 dark:text-[#FCD535]">
+                      Activo
                     </span>
-                    <span className="text-xs font-medium text-slate-500">
-                      Solo puede ver cierres diarios y descargar el Excel del
-                      16%
-                    </span>
-                  </div>
+                  )}
                 </div>
-                <span className="rounded-full border border-amber-200 bg-amber-100 px-3 py-1 text-xs font-extrabold text-amber-900">
-                  Solo Reportes
-                </span>
+                <p className="mt-1 text-xs leading-relaxed text-slate-600 dark:text-[#848E9C]">
+                  Solo lectura fiscal de la provisión SENIAT y libro mensual en
+                  Excel. Sin acceso a claves API de Binance.
+                </p>
               </div>
             </div>
-          </div>
+          </section>
         </div>
 
-        {/* COLUMNA DERECHA: Cierres Diarios Automáticos (11:59 PM) */}
-        <div className="flex flex-1 flex-col justify-between gap-5 rounded-2xl border border-slate-200/90 bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
-          <div className="flex flex-col gap-5">
-            {/* Cabecera Cierres */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3.5">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-amber-50 text-amber-600">
-                  <CalendarCheck className="h-5 w-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="font-display text-xl font-extrabold tracking-tight text-slate-900">
-                      Cierres Diarios Guardados
-                    </h2>
-                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-extrabold text-amber-800">
-                      Automático 11:59 PM
-                    </span>
-                  </div>
-                  <p className="text-xs font-medium text-slate-500">
-                    Cada medianoche guardamos el resumen exacto de tus ganancias
-                    y del IVA del día
-                  </p>
-                </div>
+        {/* Columna derecha: Instructivo resumido y claro */}
+        <aside className="lg:col-span-5">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20] sm:p-6">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-50 text-amber-600 dark:bg-[#FCD535]/15 dark:text-[#FCD535]">
+                <BookOpen className="h-4.5 w-4.5" />
               </div>
-
-              <button
-                type="button"
-                onClick={() => setClosingExportModalOpen(true)}
-                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm shadow-emerald-600/20 transition-all hover:from-emerald-500 hover:to-teal-500"
-              >
-                <Download className="h-3.5 w-3.5" />
-                <span>Cierre Día / Mes (Excel y PDF)</span>
-              </button>
-            </div>
-
-            {/* Tarjetas de Resumen Acumulado del Mes */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div className="flex flex-col justify-between gap-1 rounded-xl border border-emerald-200 bg-emerald-50/70 p-4">
-                <span className="text-xs font-bold text-emerald-900">
-                  Tu Ganancia Libre del Mes
-                </span>
-                <span className="text-2xl font-extrabold tracking-tight text-emerald-700">
-                  +${closingsData?.monthNetFreeUsdt ?? "0.00"}
-                </span>
-                <span className="text-xs font-bold text-emerald-800">
-                  {closingsData?.monthNetFreeVes ?? "0.00"} Bs. libres para ti
-                </span>
-              </div>
-
-              <div className="flex flex-col justify-between gap-1 rounded-xl border border-amber-200 bg-amber-50/70 p-4">
-                <span className="text-xs font-bold text-amber-900">
-                  Apartado IVA 16% del Mes
-                </span>
-                <span className="text-2xl font-extrabold tracking-tight text-amber-700">
-                  -${closingsData?.monthSeniatTax16Usdt ?? "0.00"}
-                </span>
-                <span className="text-xs font-bold text-amber-800">
-                  {closingsData?.monthSeniatTax16Ves ?? "0.00"} Bs. para
-                  declarar
-                </span>
-              </div>
-
-              <div className="flex flex-col justify-between gap-1 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <span className="text-xs font-bold text-slate-600">
-                  Ganancia Total (Antes de IVA)
-                </span>
-                <span className="text-2xl font-extrabold tracking-tight text-slate-900">
-                  +${closingsData?.monthGrossUsdt ?? "0.00"}
-                </span>
-                <span className="text-xs font-semibold text-slate-500">
-                  {closingsData?.monthGrossVes ?? "0.00"} Bs. en total
-                </span>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-[#EAECEF]">
+                  ¿Cómo conectar tu API de Binance?
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-[#848E9C]">
+                  Guía rápida en 4 pasos (solo lectura)
+                </p>
               </div>
             </div>
 
-            {/* Módulo Dedicado de Cierre Diario y Cierre del Mes Completo (Excel / PDF / CSV) */}
-            <ClosingExportPanel className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4" />
-
-            {/* Lista Interactiva de Cierres por Día */}
-            <div className="flex flex-col gap-3">
-              <span className="text-xs font-extrabold text-slate-600">
-                Historial de cierres por día (Haz clic en un día para ver más
-                detalles):
-              </span>
-
-              {(closingsData?.closings ?? []).length === 0 ? (
-                <div className="flex flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 py-8 text-center">
-                  <span className="text-sm font-bold text-slate-700">
-                    Aún no hay cierres diarios generados
+            <ol className="mt-5 space-y-3">
+              {CONNECTION_STEPS.map((item) => (
+                <li
+                  key={item.step}
+                  className="flex items-start gap-3 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-[#2B3139] dark:bg-[#1E2329]"
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-xs font-extrabold text-white dark:bg-[#FCD535] dark:text-[#0B0E11]">
+                    {item.step}
                   </span>
-                  <span className="max-w-sm text-xs font-medium text-slate-500">
-                    Tu primer cierre automático se guardará hoy a las 11:59 PM
-                    (Hora de Venezuela) una vez conectes tus operaciones.
-                  </span>
-                </div>
-              ) : null}
-
-              {(closingsData?.closings ?? []).map((closing) => {
-                const isExpanded = expandedClosingId === closing.id;
-                return (
-                  <div
-                    key={closing.id}
-                    className={cn(
-                      "overflow-hidden rounded-xl border transition-all duration-150",
-                      isExpanded
-                        ? "border-emerald-400 bg-white shadow-md"
-                        : "border-slate-200 bg-white hover:border-emerald-300 hover:bg-emerald-50/20"
-                    )}
-                  >
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      onClick={() =>
-                        setExpandedClosingId(isExpanded ? null : closing.id)
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          setExpandedClosingId(isExpanded ? null : closing.id);
-                        }
-                      }}
-                      className="flex cursor-pointer flex-wrap items-center justify-between gap-3 px-4 py-3.5"
-                    >
-                      {/* Fecha */}
-                      <div className="flex w-[140px] shrink-0 flex-col gap-0.5">
-                        <span className="text-sm font-extrabold text-slate-900">
-                          {closing.closingDateLabel}
-                        </span>
-                        <span className="text-xs font-semibold text-emerald-700">
-                          Guardado 11:59 PM
-                        </span>
-                      </div>
-
-                      {/* Órdenes */}
-                      <div className="flex w-[125px] shrink-0 flex-col gap-0.5">
-                        <span className="text-xs font-extrabold text-slate-800">
-                          {closing.reconciledOrders} ventas hechas
-                        </span>
-                        <span className="text-xs font-medium text-slate-500">
-                          Movido: ${closing.totalVolumeUsdt}
-                        </span>
-                      </div>
-
-                      {/* Apartado IVA */}
-                      <div className="flex w-[135px] shrink-0 flex-col gap-0.5">
-                        <span className="text-xs font-extrabold text-amber-700">
-                          IVA: -${closing.seniatTax16Usdt}
-                        </span>
-                        <span className="text-xs font-medium text-amber-800">
-                          -{closing.seniatTax16Ves} Bs (16%)
-                        </span>
-                      </div>
-
-                      {/* Ganancia Libre */}
-                      <div className="flex w-[150px] shrink-0 flex-col items-end gap-0.5">
-                        <span className="text-base font-extrabold text-emerald-600">
-                          +${closing.netFreeProfitUsdt} libres
-                        </span>
-                        <span className="text-xs font-bold text-slate-700">
-                          +{closing.netFreeProfitVes} Bs.
-                        </span>
-                      </div>
-
-                      {/* Botón Descargar + Flecha */}
-                      <div className="flex items-center gap-2">
-                        <a
-                          href={`/api/p2p/export-closing?scope=DAY&date=${encodeURIComponent(closing.closingIsoDate)}&format=xlsx`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700 transition-colors hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800"
-                        >
-                          <Download className="h-3.5 w-3.5 text-emerald-600" />
-                          <span>Excel</span>
-                        </a>
-                        <a
-                          href={`/api/p2p/export-closing?scope=DAY&date=${encodeURIComponent(closing.closingIsoDate)}&format=pdf`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
-                        >
-                          <Download className="h-3.5 w-3.5 text-slate-600" />
-                          <span>PDF</span>
-                        </a>
-                        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
-                          {isExpanded ? (
-                            <ChevronUp className="h-4 w-4" />
-                          ) : (
-                            <ChevronDown className="h-4 w-4" />
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {isExpanded && (
-                      <div className="border-t border-slate-100 bg-emerald-50/30 px-4 py-3.5">
-                        <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-                          <div className="flex items-center gap-2 text-emerald-900 font-bold">
-                            <Sparkles className="h-4 w-4 text-emerald-600" />
-                            <span>
-                              Resumen del {closing.closingDateLabel}: Hiciste{" "}
-                              {closing.reconciledOrders} operaciones y te
-                              quedaron +{closing.netFreeProfitVes} Bs. libres
-                              después de apartar el 16%.
-                            </span>
-                          </div>
-                          <span className="rounded-lg bg-white px-2.5 py-1 text-[11px] font-bold text-emerald-700 border border-emerald-200">
-                            Respaldo verificado ✓
-                          </span>
-                        </div>
-                      </div>
-                    )}
+                  <div>
+                    <p className="text-xs font-bold text-slate-900 dark:text-[#EAECEF]">
+                      {item.title}
+                    </p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-slate-600 dark:text-[#848E9C]">
+                      {item.description}
+                    </p>
                   </div>
-                );
-              })}
-            </div>
-          </div>
+                </li>
+              ))}
+            </ol>
 
-          {/* Nota Inferior de Respaldo */}
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-200/80 bg-emerald-50/50 px-4 py-3">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-emerald-600" />
-              <span className="text-xs font-bold text-emerald-950">
-                Todos tus cierres quedan guardados automáticamente y listos para
-                tu contador
-              </span>
+            <div className="mt-4 rounded-xl border border-emerald-200/80 bg-emerald-50/70 p-3.5 dark:border-[#0ECB81]/25 dark:bg-[#0ECB81]/10">
+              <p className="text-xs font-bold text-emerald-900 dark:text-[#0ECB81]">
+                ¿Vas a cambiar de cuenta Binance?
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-emerald-800 dark:text-[#EAECEF]/85">
+                Usa <strong>Desvincular cuenta</strong> antes de ingresar nuevas
+                claves. Así limpias las órdenes en vivo de la cuenta anterior
+                sin perder tus cierres diarios ni reportes mensuales.
+              </p>
             </div>
-            <span className="rounded-md bg-emerald-100 px-2.5 py-0.5 text-[11px] font-extrabold text-emerald-800">
-              100% Al Día
-            </span>
-          </div>
-        </div>
+          </section>
+        </aside>
       </div>
 
-      {/* Barra Inferior Amigable de Seguridad */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-900 px-6 py-4 text-white shadow-md">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-3 py-1 text-xs font-extrabold text-emerald-300">
-            <UserCheck className="h-3.5 w-3.5" />
-            Seguridad Activa
-          </span>
-          <span className="text-xs font-medium text-slate-300">
-            Último cierre automático guardado a las 11:59 PM &bull; Tu cuenta
-            está protegida con Google Authenticator
+      {/* Pie de seguridad criptográfica */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-3.5 text-xs text-slate-600 dark:border-[#2B3139] dark:bg-[#181A20] dark:text-[#848E9C]">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-[#0ECB81]" />
+          <span>
+            Credenciales cifradas en servidor con{" "}
+            <strong className="text-slate-900 dark:text-[#EAECEF]">
+              AES-256-GCM
+            </strong>{" "}
+            y firmas HMAC-SHA256 por solicitud.
           </span>
         </div>
-        <span className="text-xs font-extrabold text-emerald-400">
-          ✓ Todo funcionando sin problemas
+        <span className="font-mono text-[11px] text-slate-400 dark:text-[#848E9C]">
+          Zero-Trust · Read-Only API
         </span>
       </div>
     </div>

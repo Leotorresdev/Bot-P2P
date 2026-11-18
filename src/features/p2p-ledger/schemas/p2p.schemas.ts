@@ -499,7 +499,7 @@ export interface ChartCandleDto {
 export interface BankChartDataDto {
   readonly bankName: string;
   readonly timeframe: ChartTimeframe;
-  readonly candleInterval: "1H";
+  readonly candleInterval: "5M" | "1H";
   readonly timezone: "America/Caracas";
   readonly currentHourVetLabel: string;
   readonly persistedCandlesCount: number;
