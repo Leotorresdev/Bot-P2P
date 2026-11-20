@@ -150,6 +150,13 @@ export function LiveMarketView({
     String(buyBrechaAmount)
   );
 
+  const sellDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const buyDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+
   React.useEffect(() => {
     setSellInputText(String(sellBrechaAmount));
   }, [sellBrechaAmount]);
@@ -157,6 +164,13 @@ export function LiveMarketView({
   React.useEffect(() => {
     setBuyInputText(String(buyBrechaAmount));
   }, [buyBrechaAmount]);
+
+  React.useEffect(() => {
+    return () => {
+      if (sellDebounceRef.current) clearTimeout(sellDebounceRef.current);
+      if (buyDebounceRef.current) clearTimeout(buyDebounceRef.current);
+    };
+  }, []);
 
   const banksQuery = useVenezuelanBanksQuery(buyBrechaAmount, sellBrechaAmount);
   const banks = banksQuery.data ?? [];
@@ -166,17 +180,21 @@ export function LiveMarketView({
   const handleSellTextChange = (raw: string) => {
     const sanitized = raw.replace(/[^\d]/g, "");
     setSellInputText(sanitized);
+    if (sellDebounceRef.current) clearTimeout(sellDebounceRef.current);
     const parsed = Number(sanitized);
     if (sanitized !== "" && Number.isFinite(parsed) && parsed > 0) {
-      onSellBrechaAmountChange(parsed);
+      sellDebounceRef.current = setTimeout(() => {
+        onSellBrechaAmountChange(parsed);
+      }, 450);
     }
   };
 
   const handleSellBlur = () => {
+    if (sellDebounceRef.current) clearTimeout(sellDebounceRef.current);
     const parsed = Number(sellInputText);
     if (!sellInputText || !Number.isFinite(parsed) || parsed <= 0) {
       setSellInputText(String(sellBrechaAmount));
-    } else {
+    } else if (parsed !== sellBrechaAmount) {
       onSellBrechaAmountChange(parsed);
     }
   };
@@ -184,22 +202,28 @@ export function LiveMarketView({
   const handleBuyTextChange = (raw: string) => {
     const sanitized = raw.replace(/[^\d]/g, "");
     setBuyInputText(sanitized);
+    if (buyDebounceRef.current) clearTimeout(buyDebounceRef.current);
     const parsed = Number(sanitized);
     if (sanitized !== "" && Number.isFinite(parsed) && parsed > 0) {
-      onBuyBrechaAmountChange(parsed);
+      buyDebounceRef.current = setTimeout(() => {
+        onBuyBrechaAmountChange(parsed);
+      }, 450);
     }
   };
 
   const handleBuyBlur = () => {
+    if (buyDebounceRef.current) clearTimeout(buyDebounceRef.current);
     const parsed = Number(buyInputText);
     if (!buyInputText || !Number.isFinite(parsed) || parsed <= 0) {
       setBuyInputText(String(buyBrechaAmount));
-    } else {
+    } else if (parsed !== buyBrechaAmount) {
       onBuyBrechaAmountChange(parsed);
     }
   };
 
   const handleApplySuggested = (amount: number) => {
+    if (sellDebounceRef.current) clearTimeout(sellDebounceRef.current);
+    if (buyDebounceRef.current) clearTimeout(buyDebounceRef.current);
     setSellInputText(String(amount));
     setBuyInputText(String(amount));
     onSellBrechaAmountChange(amount);

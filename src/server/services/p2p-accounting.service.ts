@@ -167,16 +167,21 @@ export function mapBinanceOrderStatus(rawStatus: string | number | undefined): {
   if (
     rawStr === "CANCELLED" ||
     rawStr === "CANCELLED_BY_SYSTEM" ||
+    rawStr === "EXPIRED" ||
     rawStr.includes("CANCEL") ||
+    rawStr.includes("EXPIRE") ||
     rawStr === "6" ||
-    rawStr === "7"
+    rawStr === "7" ||
+    rawStr === "8"
   ) {
     const normalizedName =
       rawStr === "6"
         ? "CANCELLED"
         : rawStr === "7"
           ? "CANCELLED_BY_SYSTEM"
-          : rawStr;
+          : rawStr === "8"
+            ? "EXPIRED"
+            : rawStr;
     return {
       orderStatus: normalizedName,
       statusCategory: "CANCELLED",
@@ -268,7 +273,8 @@ function resolveSyncWindows(
 
 /**
  * Consulta `/sapi/v1/c2c/orderMatch/listUserOrderHistory` paginando de 50 en 50 (tope real de Binance C2C)
- * con reintento por página entre hosts para evitar respuestas parciales silenciosas en Vercel.
+ * con reintento por página entre hosts, protección contra rate-limit (429/418) y presupuesto de tiempo
+ * para evitar timeouts en cuentas de alto volumen (400-500+ órdenes/día).
  */
 async function fetchBinanceOrdersInRange(
   apiKey: string,
@@ -276,29 +282,44 @@ async function fetchBinanceOrdersInRange(
   tradeType: "BUY" | "SELL",
   startMs: number,
   endMs: number,
-  maxPagesPerWindow: number = 40
+  maxPagesPerWindow: number = 80,
+  maxDurationMs: number = 22_000
 ): Promise<{
   readonly success: boolean;
   readonly data: readonly BinanceC2COrderItem[];
   readonly error?: string;
+  readonly truncatedByBudget?: boolean;
 }> {
   const windows = resolveSyncWindows(startMs, endMs);
   if (windows.length === 0) {
     return { success: true, data: [] };
   }
 
+  const startedAtMs = Date.now();
   let lastError = "";
   let preferredHostIdx = 0;
+  let truncatedByBudget = false;
   const accumulated: BinanceC2COrderItem[] = [];
 
   for (const win of windows) {
+    if (Date.now() - startedAtMs >= maxDurationMs) {
+      truncatedByBudget = true;
+      break;
+    }
+
     const windowOrders: BinanceC2COrderItem[] = [];
     let page = 1;
 
     while (page <= maxPagesPerWindow) {
+      if (Date.now() - startedAtMs >= maxDurationMs) {
+        truncatedByBudget = true;
+        break;
+      }
+
       let pageItems: BinanceC2COrderItem[] | null = null;
       let pageTotal: number | undefined;
       let fatalAuthError = false;
+      let rateLimited = false;
 
       for (let attempt = 0; attempt < BINANCE_HOSTS.length; attempt++) {
         const hostIdx = (preferredHostIdx + attempt) % BINANCE_HOSTS.length;
@@ -319,9 +340,15 @@ async function fetchBinanceOrdersInRange(
                 "X-MBX-APIKEY": apiKey,
                 "Cache-Control": "no-store, no-cache, must-revalidate",
               },
-              signal: AbortSignal.timeout(12000),
+              signal: AbortSignal.timeout(9000),
             }
           );
+
+          if (res.status === 429 || res.status === 418) {
+            lastError = `Binance rate-limit HTTP ${res.status}`;
+            rateLimited = true;
+            break;
+          }
 
           const json = (await res.json()) as {
             code: string | number;
@@ -365,16 +392,27 @@ async function fetchBinanceOrdersInRange(
         }
       }
 
-      if (pageItems === null) {
+      if (rateLimited) {
+        accumulated.push(...windowOrders);
         return {
-          success: false,
+          success: accumulated.length > 0,
           data: accumulated,
-          error: lastError || "No se pudo completar la paginación con Binance.",
+          error: lastError,
+          truncatedByBudget: true,
         };
       }
 
       if (fatalAuthError) {
         return { success: false, data: [], error: lastError };
+      }
+
+      if (pageItems === null) {
+        accumulated.push(...windowOrders);
+        return {
+          success: accumulated.length > 0,
+          data: accumulated,
+          error: lastError || "No se pudo completar la paginación con Binance.",
+        };
       }
 
       windowOrders.push(...pageItems);
@@ -394,7 +432,7 @@ async function fetchBinanceOrdersInRange(
     accumulated.push(...windowOrders);
   }
 
-  return { success: true, data: accumulated };
+  return { success: true, data: accumulated, truncatedByBudget };
 }
 
 function mapRawItemsToStoredRecords(
@@ -410,7 +448,7 @@ function mapRawItemsToStoredRecords(
 
   return sorted.map((o) => {
     const tsInfo = formatVetOrderTimestamp(o.createTime);
-    const statusInfo = mapBinanceOrderStatus(o.orderStatus);
+    const statusInfo = mapBinanceOrderStatus(o.orderStatus ?? "UNKNOWN");
     const amountDec = parseSafeDecimal(o.amount);
     const unitPriceDec = parseSafeDecimal(o.unitPrice);
     const parsedRawTotal = parseSafeDecimal(o.totalPrice);
@@ -477,15 +515,19 @@ export function calculateVueltaSummary(params: {
   let inProgressCount = 0;
 
   for (const order of orders) {
-    if (order.statusCategory === "CANCELLED") {
+    const verifiedStatus = mapBinanceOrderStatus(
+      order.orderStatus || order.statusCategory
+    ).statusCategory;
+
+    if (order.statusCategory === "CANCELLED" || verifiedStatus === "CANCELLED") {
       cancelledCount += 1;
       continue;
     }
-    if (order.statusCategory === "IN_APPEAL") {
+    if (order.statusCategory === "IN_APPEAL" || verifiedStatus === "IN_APPEAL") {
       appealCount += 1;
       continue;
     }
-    if (order.statusCategory !== "COMPLETED") {
+    if (order.statusCategory !== "COMPLETED" || verifiedStatus !== "COMPLETED") {
       inProgressCount += 1;
       continue;
     }
@@ -624,7 +666,7 @@ export function calculateVueltaSummary(params: {
     currentWacCostVes: activeAvgBuy.toFixed(2),
     availableVaultUsdt: formatDecimalMoney(pendingUsdtDec, 2),
     totalBinanceFeesUsdt: volumeCommissionUsdt.toFixed(2),
-    nextClosingTimeVet: "11:59 PM (-4:00 UTC)",
+    nextClosingTimeVet: "Cierre Manual",
     lastSyncSecondsAgo: 2,
     workingCapitalUsdt: formatDecimalMoney(totalVolumeUsdt, 2),
     workingCapitalVes: formatDecimalMoney(totalSoldVes.plus(totalBoughtVes), 2),
@@ -816,7 +858,7 @@ export function buildAggregatedSummaryFromClosures(params: {
     currentWacCostVes: activeAvgBuy.toFixed(2),
     availableVaultUsdt: formatDecimalMoney(pendingUsdtDec, 2),
     totalBinanceFeesUsdt: volumeCommissionUsdt.toFixed(2),
-    nextClosingTimeVet: "11:59 PM (-4:00 UTC)",
+    nextClosingTimeVet: "Cierre Manual",
     lastSyncSecondsAgo: 2,
     workingCapitalUsdt: formatDecimalMoney(totalVolumeUsdt, 2),
     workingCapitalVes: formatDecimalMoney(totalSoldVes.plus(totalBoughtVes), 2),
@@ -896,11 +938,13 @@ function resolvePeriodBounds(params: {
 }
 
 export class P2PAccountingService {
+  private static readonly SYNC_COOLDOWN_MS = 25_000;
+  private static readonly INCREMENTAL_OVERLAP_MS = 30 * 60_000;
+  private static readonly INITIAL_SYNC_WINDOW_MS = 7 * 86_400_000;
+  private static readonly MAX_OPEN_ORDER_LOOKBACK_MS = 48 * 3_600_000;
+
   private static readonly lastSyncTimestampByUser = new Map<string, number>();
-  private static readonly inFlightSyncByUser = new Map<
-    string,
-    Promise<readonly P2POrderRowDto[]>
-  >();
+  private static readonly inFlightSyncByUser = new Map<string, Promise<void>>();
 
   /**
    * Prueba en vivo si las credenciales conectadas responden con éxito en Binance SAPI.
@@ -1015,23 +1059,29 @@ export class P2PAccountingService {
   }
 
   /**
-   * Sincroniza desde Binance un rango específico (paginado de 50 en 50)
-   * y guarda todas las órdenes (todos los estados/tipos) en la base de datos,
-   * fusionando en memoria los registros frescos para garantizar paridad inmediata en Vercel.
+   * Sincroniza desde Binance un rango específico (paginado de 50 en 50 con presupuesto de tiempo)
+   * y guarda las órdenes en Supabase en lotes de 200. Lee únicamente el rango solicitado
+   * (`readRange`) en lugar de descargar todo el historial de la cuenta.
    */
   public static async syncBinanceRange(
     userId: string,
     startMs: number,
-    endMs: number
+    endMs: number,
+    readRange?: { readonly startMs?: number | null; readonly endMs?: number | null }
   ): Promise<readonly P2POrderRowDto[]> {
+    const effectiveReadRange = readRange ?? { startMs, endMs };
     const credential =
       await SupabaseVaultRepository.getBinanceCredential(userId);
     if (!credential) {
-      const stored = await SupabaseVaultRepository.getUserOrders(userId);
+      const stored = await SupabaseVaultRepository.getUserOrdersInRange(
+        userId,
+        effectiveReadRange
+      );
       return stored.map(toMirrorOrderDto);
     }
 
     let freshRecords: StoredP2POrderRecord[] = [];
+    let maxFreshCreateMs = 0;
 
     try {
       const { apiKey, apiSecret } = decryptBinanceCredentials(
@@ -1048,9 +1098,14 @@ export class P2PAccountingService {
       const combined = [...buyRes.data, ...sellRes.data];
       if (combined.length > 0) {
         freshRecords = mapRawItemsToStoredRecords(userId, combined);
+        for (const rec of freshRecords) {
+          if (rec.createTimeMs > maxFreshCreateMs) {
+            maxFreshCreateMs = rec.createTimeMs;
+          }
+        }
         await SupabaseVaultRepository.saveUserOrders(userId, freshRecords);
-        this.lastSyncTimestampByUser.set(userId, Date.now());
       }
+      this.lastSyncTimestampByUser.set(userId, Date.now());
     } catch (err) {
       console.error(
         "[P2PAccountingService] Error sincronizando rango desde Binance:",
@@ -1058,17 +1113,24 @@ export class P2PAccountingService {
       );
     }
 
-    const storedAfter = await SupabaseVaultRepository.getUserOrders(userId);
+    const storedAfter = await SupabaseVaultRepository.getUserOrdersInRange(
+      userId,
+      effectiveReadRange
+    );
     if (freshRecords.length === 0) {
       return storedAfter.map(toMirrorOrderDto);
     }
 
+    const rStart = effectiveReadRange.startMs ?? null;
+    const rEnd = effectiveReadRange.endMs ?? null;
     const mergedMap = new Map<string, StoredP2POrderRecord>();
     for (const oldRec of storedAfter) {
       mergedMap.set(oldRec.orderNumber, oldRec);
     }
-    // Priorizar siempre los registros recién traídos de Binance para sanear cualquier fila v1 antigua
+    // Priorizar siempre los registros recién traídos de Binance dentro del rango solicitado
     for (const fresh of freshRecords) {
+      if (rStart !== null && fresh.createTimeMs < rStart) continue;
+      if (rEnd !== null && fresh.createTimeMs > rEnd) continue;
       mergedMap.set(fresh.orderNumber, fresh);
     }
 
@@ -1083,75 +1145,216 @@ export class P2PAccountingService {
   }
 
   /**
-   * Obtiene el espejo exacto de órdenes Binance P2P (todos los tipos y estados,
-   * orden cronológico idéntico createTime DESC sin agrupar ni alterar).
+   * Obtiene el espejo exacto de órdenes Binance P2P acotado a `targetBounds`.
+   * Optimizado para cuentas de alto volumen (400-500+ órdenes/día):
+   * - Evita descargar todo el historial en cada lectura usando `getUserOrdersInRange`.
+   * - Usa cursor incremental (`última orden - 30 min` + órdenes abiertas <48h) en lugar de re-descargar 72h.
+   * - Deduplica peticiones simultáneas (`inFlightSyncByUser`) + cooldown de 25s + candado distribuido.
+   * - Los rangos estrictamente históricos ya guardados en Supabase se leen directo sin llamar a Binance.
    */
   public static async getUserOrdersFromVaultOrBinance(
     userId: string,
     forceFresh: boolean = false,
     targetBounds?: { readonly startMs: number | null; readonly endMs: number | null }
   ): Promise<readonly P2POrderRowDto[]> {
+    const readRange = {
+      startMs: targetBounds?.startMs ?? null,
+      endMs: targetBounds?.endMs ?? null,
+    };
+
     const credential =
       await SupabaseVaultRepository.getBinanceCredential(userId);
 
     if (!credential) {
-      const stored = await SupabaseVaultRepository.getUserOrders(userId);
+      const stored = await SupabaseVaultRepository.getUserOrdersInRange(
+        userId,
+        readRange
+      );
       return stored.map(toMirrorOrderDto);
     }
 
     const now = Date.now();
-    const defaultStartMs = now - MAX_BINANCE_WINDOW_MS;
     const defaultEndMs = now + 60_000;
-    const needsCustomRange =
-      targetBounds?.startMs !== null &&
-      targetBounds?.startMs !== undefined &&
-      targetBounds.startMs < defaultStartMs;
 
-    const lastSync = this.lastSyncTimestampByUser.get(userId) ?? 0;
+    // 1. Lectura puramente histórica (días/meses pasados terminados hace más de 1 hora):
+    //    servir desde Supabase si ya existen órdenes en ese rango; solo consultar Binance si está vacío.
+    const isHistoricalRange =
+      !forceFresh &&
+      readRange.startMs !== null &&
+      readRange.endMs !== null &&
+      readRange.endMs < now - 60 * 60_000;
 
-    if (!forceFresh && !needsCustomRange && now - lastSync < 5000) {
-      const cached = await SupabaseVaultRepository.getUserOrders(userId);
-      if (cached.length > 0) {
-        return cached.map(toMirrorOrderDto);
+    if (isHistoricalRange && readRange.startMs !== null && readRange.endMs !== null) {
+      const cachedHistorical =
+        await SupabaseVaultRepository.getUserOrdersInRange(userId, readRange);
+      if (cachedHistorical.length > 0) {
+        return cachedHistorical.map(toMirrorOrderDto);
       }
-    }
-
-    if (needsCustomRange && targetBounds?.startMs && targetBounds?.endMs) {
       return this.syncBinanceRange(
         userId,
-        targetBounds.startMs,
-        Math.max(targetBounds.endMs, defaultEndMs)
+        readRange.startMs,
+        readRange.endMs,
+        readRange
       );
     }
 
-    const activePromise = this.inFlightSyncByUser.get(userId);
-    if (activePromise && !forceFresh) {
-      return activePromise;
+    // 2. Cooldown en memoria (25s): evita sobrecargar Binance entre polling de summary/orders/shifts
+    const lastSync = this.lastSyncTimestampByUser.get(userId) ?? 0;
+    if (!forceFresh && now - lastSync < this.SYNC_COOLDOWN_MS) {
+      const cached = await SupabaseVaultRepository.getUserOrdersInRange(
+        userId,
+        readRange
+      );
+      return cached.map(toMirrorOrderDto);
     }
 
-    const syncPromise = (async (): Promise<readonly P2POrderRowDto[]> => {
+    // 3. Deduplicación en vuelo: si otra petición ya está sincronizando para este usuario, esperar y leer rango
+    const activeSync = this.inFlightSyncByUser.get(userId);
+    if (activeSync && !forceFresh) {
+      await activeSync;
+      const cached = await SupabaseVaultRepository.getUserOrdersInRange(
+        userId,
+        readRange
+      );
+      return cached.map(toMirrorOrderDto);
+    }
+
+    // 4. Sincronización incremental por cursor + candado distribuido en Supabase
+    const syncJob = (async (): Promise<void> => {
+      let lockAcquired = false;
+      let latestSyncedCreateMs = 0;
+      let syncErrorMsg: string | null = null;
+
       try {
-        const existingStored = await SupabaseVaultRepository.getUserOrders(
-          userId
+        if (!forceFresh) {
+          const lockState =
+            await SupabaseVaultRepository.tryAcquireDistributedSyncLock(
+              userId,
+              this.SYNC_COOLDOWN_MS
+            );
+          if (!lockState.acquired) {
+            this.lastSyncTimestampByUser.set(userId, Date.now());
+            return;
+          }
+          lockAcquired = true;
+        }
+
+        const [latestStoredMs, oldestOpenMs] = await Promise.all([
+          SupabaseVaultRepository.getLatestOrderTimestampMs(userId),
+          SupabaseVaultRepository.getOldestOpenOrderTimestampMs(
+            userId,
+            this.MAX_OPEN_ORDER_LOOKBACK_MS
+          ),
+        ]);
+
+        let syncStartMs: number;
+        if (forceFresh) {
+          syncStartMs =
+            readRange.startMs ?? now - this.INITIAL_SYNC_WINDOW_MS;
+        } else if (latestStoredMs > 0) {
+          const cursorWithOverlap = Math.max(
+            0,
+            latestStoredMs - this.INCREMENTAL_OVERLAP_MS
+          );
+          const openOrderStart =
+            oldestOpenMs !== null ? Math.max(0, oldestOpenMs - 5 * 60_000) : cursorWithOverlap;
+          syncStartMs = Math.max(
+            now - this.MAX_OPEN_ORDER_LOOKBACK_MS,
+            Math.min(cursorWithOverlap, openOrderStart)
+          );
+        } else {
+          // Primera sincronización de la cuenta: acotar a 7 días (o inicio del rango pedido si es más reciente)
+          syncStartMs =
+            readRange.startMs !== null
+              ? Math.max(readRange.startMs, now - this.INITIAL_SYNC_WINDOW_MS)
+              : now - this.INITIAL_SYNC_WINDOW_MS;
+        }
+
+        const { apiKey, apiSecret } = decryptBinanceCredentials(
+          credential.apiKeyEncrypted,
+          credential.iv,
+          credential.authTag
         );
-        // Si la cuenta ya tiene su historial en Supabase, sincronizar en vivo las últimas 72h
-        // para respuesta instantánea (<1s) en cuentas de alto volumen (+8,000 órdenes).
-        const incrementalStartMs =
-          !forceFresh && existingStored.length > 0
-            ? now - 3 * 86_400_000
-            : defaultStartMs;
-        return await this.syncBinanceRange(
-          userId,
-          incrementalStartMs,
-          defaultEndMs
+
+        const [buyRes, sellRes] = await Promise.all([
+          fetchBinanceOrdersInRange(
+            apiKey,
+            apiSecret,
+            "BUY",
+            syncStartMs,
+            defaultEndMs
+          ),
+          fetchBinanceOrdersInRange(
+            apiKey,
+            apiSecret,
+            "SELL",
+            syncStartMs,
+            defaultEndMs
+          ),
+        ]);
+
+        const combined = [...buyRes.data, ...sellRes.data];
+        if (combined.length > 0) {
+          const freshRecords = mapRawItemsToStoredRecords(userId, combined);
+          for (const rec of freshRecords) {
+            if (rec.createTimeMs > latestSyncedCreateMs) {
+              latestSyncedCreateMs = rec.createTimeMs;
+            }
+          }
+          await SupabaseVaultRepository.saveUserOrders(userId, freshRecords);
+        } else {
+          latestSyncedCreateMs = latestStoredMs;
+        }
+
+        if (!buyRes.success && buyRes.error) {
+          syncErrorMsg = buyRes.error;
+        } else if (!sellRes.success && sellRes.error) {
+          syncErrorMsg = sellRes.error;
+        }
+
+        this.lastSyncTimestampByUser.set(userId, Date.now());
+      } catch (err) {
+        syncErrorMsg = err instanceof Error ? err.message : String(err);
+        console.error(
+          "[P2PAccountingService] Error en sincronización incremental:",
+          syncErrorMsg
         );
       } finally {
+        if (lockAcquired) {
+          await SupabaseVaultRepository.releaseDistributedSyncLock(
+            userId,
+            latestSyncedCreateMs,
+            syncErrorMsg
+          );
+        }
         P2PAccountingService.inFlightSyncByUser.delete(userId);
       }
     })();
 
-    this.inFlightSyncByUser.set(userId, syncPromise);
-    return syncPromise;
+    this.inFlightSyncByUser.set(userId, syncJob);
+    await syncJob;
+
+    // Si se pidió un rango mensual/diario amplio que empieza antes de los últimos 7 días y aún no tiene datos al inicio,
+    // completar una única vez ese tramo faltante.
+    const resultOrders = await SupabaseVaultRepository.getUserOrdersInRange(
+      userId,
+      readRange
+    );
+
+    if (
+      readRange.startMs !== null &&
+      readRange.startMs < now - this.INITIAL_SYNC_WINDOW_MS &&
+      resultOrders.length === 0
+    ) {
+      return this.syncBinanceRange(
+        userId,
+        readRange.startMs,
+        readRange.endMs ?? defaultEndMs,
+        readRange
+      );
+    }
+
+    return resultOrders.map(toMirrorOrderDto);
   }
 
   /**
@@ -1168,8 +1371,6 @@ export class P2PAccountingService {
     readonly date?: string;
     readonly month?: string;
   }): Promise<PnlSummaryDto> {
-    await this.ensurePendingDailyClosuresConsolidated(params.userId);
-
     const taxConfig = await SupabaseVaultRepository.getUserTaxConfig(
       params.userId
     );
@@ -1204,7 +1405,7 @@ export class P2PAccountingService {
       return calculateVueltaSummary({
         orders: shiftOrders,
         period: "TODAY",
-        periodLabel: `Jornada #${activeShift.shiftNumber} · Activa desde ${activeShift.startTimeVetLabel} VET`,
+        periodLabel: `Jornada #${activeShift.shiftNumber} · Desde ${activeShift.dateLabelVet} ${activeShift.startTimeVetLabel} VET`,
         method: params.method,
         badge: taxConfig.merchantBadge,
         seniatTaxPercent: taxConfig.seniatTaxPercent,
@@ -1267,8 +1468,6 @@ export class P2PAccountingService {
     readonly inProgressCount: number;
     readonly availableDates: readonly string[];
   }> {
-    await this.ensurePendingDailyClosuresConsolidated(params.userId);
-
     const effectivePeriod: PeriodFilter =
       params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date)
         ? "DAY"
@@ -1551,58 +1750,15 @@ export class P2PAccountingService {
   }
 
   /**
-   * Verificación automática de seguridad (11:59:59 PM VET):
-   * 1. Si existe una jornada abierta de un día anterior (o si ya son las 23:59:59 VET del día de la jornada),
-   *    la cierra automáticamente a las 23:59:59 VET (`closedBy: "AUTO_2359"`).
-   * 2. Si existen días con `ShiftClosure` que aún no tienen su `DailyTotalClosure` sincronizado,
-   *    los consolida al instante.
+   * Auto-cierre 23:59 desactivado: las jornadas permanecen abiertas (incluso varios días)
+   * hasta que el usuario presione manualmente «Cerrar Jornada».
+   * Se conserva el método como no-op por compatibilidad.
    */
   public static async ensurePendingDailyClosuresConsolidated(
-    userId: string,
-    forceCloseIf2359Today: boolean = false
+    _userId: string,
+    _forceCloseIf2359Today: boolean = false
   ): Promise<void> {
-    const nowMs = Date.now();
-    const todayIso = getCurrentVetDateIso(nowMs);
-    const activeShift = await SupabaseVaultRepository.getActiveShift(userId);
-
-    if (activeShift) {
-      const shiftDayRange = getVetDayRangeMs(activeShift.dateIsoVet);
-      const isPastDay = activeShift.dateIsoVet < todayIso;
-      const isAtOrPast235959 = nowMs >= shiftDayRange.endMs - 999;
-
-      if (isPastDay || isAtOrPast235959 || forceCloseIf2359Today) {
-        const autoEndMs = isPastDay
-          ? shiftDayRange.endMs
-          : Math.min(nowMs, shiftDayRange.endMs);
-        await this.closeShiftInternal(userId, activeShift, {
-          forcedEndMs: Math.max(activeShift.shiftStartTimeMs, autoEndMs),
-          closedBy: "AUTO_2359",
-        });
-      }
-    }
-
-    const [allShifts, allDailyTotals] = await Promise.all([
-      SupabaseVaultRepository.getAllUserShiftClosures(userId),
-      SupabaseVaultRepository.getAllUserDailyTotalClosures(userId),
-    ]);
-
-    const shiftsByDate = new Map<string, ShiftClosureDto[]>();
-    for (const s of allShifts) {
-      const list = shiftsByDate.get(s.dateIsoVet) ?? [];
-      list.push(s);
-      shiftsByDate.set(s.dateIsoVet, list);
-    }
-
-    const totalsByDate = new Map<string, DailyTotalClosureDto>(
-      allDailyTotals.map((t) => [t.dateIsoVet, t])
-    );
-
-    for (const [dateIso, shifts] of shiftsByDate.entries()) {
-      const existingTotal = totalsByDate.get(dateIso);
-      if (!existingTotal || existingTotal.shiftsCount !== shifts.length) {
-        await this.consolidateDayClosures(userId, dateIso);
-      }
-    }
+    // Intencionalmente vacío: sin auto-cierre nocturno ni lecturas masivas de cierres en cada request
   }
 
   private static async closeShiftInternal(
@@ -1617,15 +1773,19 @@ export class P2PAccountingService {
       activeShift.shiftStartTimeMs,
       options?.forcedEndMs ?? Date.now()
     );
-    const closedBy = options?.closedBy ?? "MANUAL";
 
-    const [allSynced, taxConfig] = await Promise.all([
+    const endTsInfo = formatVetOrderTimestamp(shiftEndTimeMs);
+    const isMultiDay = endTsInfo.dateIso !== activeShift.dateIsoVet;
+
+    const [allSynced, taxConfig, existingEndDayShifts] = await Promise.all([
       this.syncBinanceRange(
         userId,
         activeShift.shiftStartTimeMs,
-        shiftEndTimeMs
+        shiftEndTimeMs,
+        { startMs: activeShift.shiftStartTimeMs, endMs: shiftEndTimeMs }
       ),
       SupabaseVaultRepository.getUserTaxConfig(userId),
+      SupabaseVaultRepository.getShiftClosuresByDate(userId, endTsInfo.dateIso),
     ]);
 
     // Filtrar estrictamente órdenes dentro del intervalo [shiftStartTimeMs, shiftEndTimeMs]
@@ -1635,17 +1795,23 @@ export class P2PAccountingService {
         o.createTimeMs <= shiftEndTimeMs
     );
 
-    const endTsInfo = formatVetOrderTimestamp(shiftEndTimeMs);
-    const endTimeVetLabel =
-      closedBy === "AUTO_2359" &&
-      activeShift.dateIsoVet < getCurrentVetDateIso()
-        ? "23:59:59"
-        : endTsInfo.timeLabel;
+    const startTimeVetLabel = isMultiDay
+      ? `${activeShift.dateLabelVet} ${activeShift.startTimeVetLabel}`
+      : activeShift.startTimeVetLabel;
+    const endTimeVetLabel = isMultiDay
+      ? `${endTsInfo.dateLabel} ${endTsInfo.timeLabel}`
+      : endTsInfo.timeLabel;
+
+    const effectiveShiftNumber = isMultiDay
+      ? existingEndDayShifts.length + 1
+      : activeShift.shiftNumber;
 
     const effectiveBadge = activeShift.merchantBadge || taxConfig.merchantBadge;
     const badgeMeta = MERCHANT_BADGE_META[effectiveBadge];
 
-    const periodLabel = `Cierre Jornada #${activeShift.shiftNumber} (${activeShift.dateLabelVet} · ${activeShift.startTimeVetLabel} - ${endTimeVetLabel} VET)`;
+    const periodLabel = isMultiDay
+      ? `Cierre Jornada #${effectiveShiftNumber} (${startTimeVetLabel} → ${endTimeVetLabel} VET)`
+      : `Cierre Jornada #${effectiveShiftNumber} (${endTsInfo.dateLabel} · ${startTimeVetLabel} - ${endTimeVetLabel} VET)`;
 
     const summary = calculateVueltaSummary({
       orders: shiftOrders,
@@ -1657,16 +1823,16 @@ export class P2PAccountingService {
     });
 
     const closure: ShiftClosureDto = {
-      id: `shf_${activeShift.dateIsoVet}_j${activeShift.shiftNumber}_${activeShift.shiftStartTimeMs}`,
+      id: `shf_${endTsInfo.dateIso}_j${effectiveShiftNumber}_${activeShift.shiftStartTimeMs}`,
       userId,
-      dateIsoVet: activeShift.dateIsoVet,
-      dateLabelVet: activeShift.dateLabelVet,
-      shiftNumber: activeShift.shiftNumber,
+      dateIsoVet: endTsInfo.dateIso,
+      dateLabelVet: endTsInfo.dateLabel,
+      shiftNumber: effectiveShiftNumber,
       shiftStartTimeMs: activeShift.shiftStartTimeMs,
       shiftEndTimeMs,
-      startTimeVetLabel: activeShift.startTimeVetLabel,
+      startTimeVetLabel,
       endTimeVetLabel,
-      closedBy,
+      closedBy: "MANUAL",
       merchantBadge: effectiveBadge,
       merchantBadgeLabel: badgeMeta.label,
       badgeFeePercent: String(badgeMeta.feePercent),
@@ -1677,30 +1843,26 @@ export class P2PAccountingService {
 
     await SupabaseVaultRepository.saveShiftClosure(closure);
     await SupabaseVaultRepository.clearActiveShift(userId);
-    await this.consolidateDayClosures(userId, activeShift.dateIsoVet);
 
     return closure;
   }
 
   /**
-   * Obtiene el estado actual de la jornada y el listado de "Mis Cierres de Hoy".
+   * Obtiene el estado actual de la jornada y los cierres manuales de la fecha seleccionada.
    */
   public static async getShiftDashboardState(
     userId: string,
     dateIso?: string
   ): Promise<ShiftDashboardStateDto> {
-    await this.ensurePendingDailyClosuresConsolidated(userId);
-
     const targetDateIso =
       dateIso && /^\d{4}-\d{2}-\d{2}$/.test(dateIso)
         ? dateIso
         : getCurrentVetDateIso();
     const targetDateLabel = formatDateIsoVe(targetDateIso);
 
-    const [activeShift, todayShifts, todayTotalClosure] = await Promise.all([
+    const [activeShift, todayShifts] = await Promise.all([
       SupabaseVaultRepository.getActiveShift(userId),
       SupabaseVaultRepository.getShiftClosuresByDate(userId, targetDateIso),
-      SupabaseVaultRepository.getDailyTotalClosureByDate(userId, targetDateIso),
     ]);
 
     return {
@@ -1709,21 +1871,20 @@ export class P2PAccountingService {
       selectedDateLabelVet: targetDateLabel,
       nextShiftNumber: todayShifts.length + 1,
       todayShifts,
-      todayTotalClosure,
+      todayTotalClosure: null,
     };
   }
 
   /**
    * Inicia una nueva jornada en `Date.now()` (hora America/Caracas), empezando en 0.00.
+   * Permanece abierta hasta que el usuario presione manualmente «Cerrar Jornada».
    */
   public static async startShift(
     userId: string
   ): Promise<ShiftDashboardStateDto> {
-    await this.ensurePendingDailyClosuresConsolidated(userId);
-
     const existingActive = await SupabaseVaultRepository.getActiveShift(userId);
     if (existingActive) {
-      return this.getShiftDashboardState(userId, existingActive.dateIsoVet);
+      return this.getShiftDashboardState(userId, getCurrentVetDateIso());
     }
 
     const nowMs = Date.now();
@@ -1750,8 +1911,8 @@ export class P2PAccountingService {
   }
 
   /**
-   * Cierra la jornada actual en `Date.now()`, guarda el `ShiftClosure`,
-   * consolida el avance en `DailyTotalClosure` y deja el tablero en 0.00.
+   * Cierra manualmente la jornada actual en `Date.now()`, guarda el `ShiftClosure`
+   * (sin alterar el registro contable diario/mensual) y deja el tablero en 0.00.
    */
   public static async closeShift(userId: string): Promise<{
     readonly closure: ShiftClosureDto | null;
@@ -1770,35 +1931,30 @@ export class P2PAccountingService {
 
     const state = await this.getShiftDashboardState(
       userId,
-      activeShift.dateIsoVet
+      closure.dateIsoVet
     );
     return { closure, state };
   }
 
   /**
-   * Ejecutado por el Cron de las 23:59 VET para auto-cerrar cualquier jornada abierta
-   * y consolidar el Cierre Total del Día de todos los usuarios.
+   * Cron de auto-cierre desactivado: las jornadas ahora cierran únicamente de forma manual.
    */
   public static async runCronDailyCloseAllUsers(): Promise<{
     readonly processedUsers: number;
     readonly executedAtVet: string;
   }> {
-    const userIds = await SupabaseVaultRepository.getAllUserIds();
-    for (const userId of userIds) {
-      await this.ensurePendingDailyClosuresConsolidated(userId, true);
-    }
     const nowVet = formatVetOrderTimestamp(Date.now());
     return {
-      processedUsers: userIds.length,
+      processedUsers: 0,
       executedAtVet: `${nowVet.dateTimeLabel} (-4:00 UTC)`,
     };
   }
 
   /**
    * Construye el reporte completo de:
-   * - `SHIFT`: un cierre parcial de jornada individual (`ShiftClosure`)
-   * - `DAY`: el Cierre Total del Día (`DailyTotalClosure`)
-   * - `MONTH`: el Cierre del Mes Completo alimentado de los `DailyTotalClosure` del mes
+   * - `SHIFT`: cierre manual individual de una jornada (`ShiftClosure`)
+   * - `DAY`: reporte contable calendario de todas las transacciones del día VET (00:00:00–23:59:59)
+   * - `MONTH`: libro contable/fiscal mensual de todas las transacciones del mes VET (con tabla día por día)
    */
   public static async buildClosingReport(params: {
     readonly userId: string;
@@ -1807,15 +1963,13 @@ export class P2PAccountingService {
     readonly month?: string;
     readonly shiftId?: string;
   }): Promise<ClosingReportData> {
-    await this.ensurePendingDailyClosuresConsolidated(params.userId);
-
     const taxConfig = await SupabaseVaultRepository.getUserTaxConfig(
       params.userId
     );
     const nowVet = formatVetOrderTimestamp(Date.now());
     const generatedAtVet = `${nowVet.dateTimeLabel} (-4:00 UTC)`;
 
-    // 1. Reporte de Cierre Parcial de Jornada Individual (SHIFT)
+    // 1. Reporte de Cierre Manual de Jornada Individual (SHIFT)
     if (params.scope === "SHIFT" && params.shiftId) {
       const shiftClosure = await SupabaseVaultRepository.getShiftClosureById(
         params.userId,
@@ -1834,8 +1988,7 @@ export class P2PAccountingService {
       }
     }
 
-    // 2. Reporte de Cierre / Libro Fiscal del Mes Completo (MONTH)
-    // Combina cierres diarios consolidados y todas las transacciones sincronizadas del mes desde la vinculación de Binance
+    // 2. Reporte Contable / Libro Fiscal del Mes Completo (MONTH) — Basado en transacciones calendario
     if (params.scope === "MONTH") {
       const targetMonth =
         params.month && /^\d{4}-\d{2}$/.test(params.month)
@@ -1843,61 +1996,75 @@ export class P2PAccountingService {
           : getCurrentVetMonthIso();
       const monthRange = getVetMonthRangeMs(targetMonth);
 
-      const [dailyClosures, mirrorOrders] = await Promise.all([
-        SupabaseVaultRepository.getDailyTotalClosuresByMonth(
-          params.userId,
-          targetMonth
-        ),
-        this.getUserOrdersFromVaultOrBinance(params.userId, false, {
+      const mirrorOrders = await this.getUserOrdersFromVaultOrBinance(
+        params.userId,
+        false,
+        {
           startMs: monthRange.startMs,
           endMs: monthRange.endMs,
-        }),
-      ]);
+        }
+      );
 
-      const monthMirrorOrders = mirrorOrders.filter(
+      const monthOrders = mirrorOrders.filter(
         (o) =>
           o.createTimeMs >= monthRange.startMs &&
           o.createTimeMs <= monthRange.endMs
       );
 
-      const closureOrders = mergeChronologicalOrders(
-        dailyClosures.map((d) => d.orders)
+      // Agrupar transacciones por día calendario VET para la tabla "Día por Día" en Excel/PDF
+      const ordersByDay = new Map<string, P2POrderRowDto[]>();
+      for (const order of monthOrders) {
+        const dayKey = order.dateIsoVet;
+        const list = ordersByDay.get(dayKey) ?? [];
+        list.push(order);
+        ordersByDay.set(dayKey, list);
+      }
+
+      const sortedDayKeys = Array.from(ordersByDay.keys()).sort((a, b) =>
+        a.localeCompare(b)
       );
-      const consolidatedOrders = mergeChronologicalOrders([
-        closureOrders,
-        monthMirrorOrders,
-      ]);
-      const totalShiftsInMonth = dailyClosures.reduce(
-        (acc, d) => acc + d.shiftsCount,
-        0
-      );
+      const badgeMeta = MERCHANT_BADGE_META[taxConfig.merchantBadge];
 
-      const periodLabel =
-        dailyClosures.length > 0
-          ? `Libro Fiscal Mensual: ${monthRange.labelEs} (${consolidatedOrders.length} órdenes · ${dailyClosures.length} ${dailyClosures.length === 1 ? "día cerrado" : "días cerrados"} · ${totalShiftsInMonth} ${totalShiftsInMonth === 1 ? "jornada" : "jornadas"})`
-          : `Libro Fiscal Mensual: ${monthRange.labelEs} (${consolidatedOrders.length} órdenes registradas)`;
-
-      const hasExtraSyncedOrders =
-        consolidatedOrders.length > closureOrders.length ||
-        dailyClosures.length === 0;
-
-      const summary = hasExtraSyncedOrders
-        ? calculateVueltaSummary({
-            orders: consolidatedOrders,
-            period: "MONTH",
-            periodLabel,
+      const dailyBreakdown: DailyTotalClosureDto[] = sortedDayKeys.map(
+        (dayIso) => {
+          const dayOrders = ordersByDay.get(dayIso) ?? [];
+          const dayLabel = formatDateIsoVe(dayIso);
+          const daySummary = calculateVueltaSummary({
+            orders: dayOrders,
+            period: "DAY",
+            periodLabel: `Día ${dayLabel}`,
             method: "FIFO",
             badge: taxConfig.merchantBadge,
             seniatTaxPercent: taxConfig.seniatTaxPercent,
-          })
-        : buildAggregatedSummaryFromClosures({
-            summaries: dailyClosures.map((d) => d.summary),
-            orders: consolidatedOrders,
-            period: "MONTH",
-            periodLabel,
-            badge: taxConfig.merchantBadge,
-            seniatTaxPercent: taxConfig.seniatTaxPercent,
           });
+          return {
+            id: `cal_${params.userId}_${dayIso}`,
+            userId: params.userId,
+            dateIsoVet: dayIso,
+            monthIsoVet: targetMonth,
+            dateLabelVet: dayLabel,
+            executedAtVet: "Registro Diario Calendario VET",
+            shiftsCount: 1,
+            merchantBadge: taxConfig.merchantBadge,
+            merchantBadgeLabel: badgeMeta.label,
+            summary: daySummary,
+            shiftsMeta: [],
+            orders: dayOrders,
+            updatedAtIso: new Date().toISOString(),
+          };
+        }
+      );
+
+      const periodLabel = `Libro Fiscal Mensual: ${monthRange.labelEs} (${monthOrders.length} órdenes · ${dailyBreakdown.length} ${dailyBreakdown.length === 1 ? "día con actividad" : "días con actividad"})`;
+
+      const summary = calculateVueltaSummary({
+        orders: monthOrders,
+        period: "MONTH",
+        periodLabel,
+        method: "FIFO",
+        badge: taxConfig.merchantBadge,
+        seniatTaxPercent: taxConfig.seniatTaxPercent,
+      });
 
       return {
         scope: "MONTH",
@@ -1905,45 +2072,28 @@ export class P2PAccountingService {
         periodLabel,
         generatedAtVet,
         summary,
-        orders: consolidatedOrders,
-        dailyClosures,
-        totalShiftsInPeriod: totalShiftsInMonth,
+        orders: monthOrders,
+        dailyClosures: dailyBreakdown,
+        totalShiftsInPeriod: dailyBreakdown.length,
       };
     }
 
-    // 3. Reporte de Cierre Total del Día (DAY)
+    // 3. Reporte Contable del Día Calendario (DAY) — Todas las transacciones del día VET (00:00:00–23:59:59)
     const targetDate =
       params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date)
         ? params.date
         : getCurrentVetDateIso();
 
-    const existingDailyTotal =
-      await SupabaseVaultRepository.getDailyTotalClosureByDate(
-        params.userId,
-        targetDate
-      );
-
-    if (existingDailyTotal) {
-      return {
-        scope: "DAY",
-        periodKey: targetDate,
-        periodLabel: existingDailyTotal.summary.periodLabel,
-        generatedAtVet,
-        summary: existingDailyTotal.summary,
-        orders: existingDailyTotal.orders,
-        dailyClosures: [existingDailyTotal],
-        totalShiftsInPeriod: existingDailyTotal.shiftsCount,
-      };
-    }
-
-    // Fallback para días históricos previos sin jornadas manuales registradas
     const range = getVetDayRangeMs(targetDate);
-    const allSynced = await this.syncBinanceRange(
+    const daySynced = await this.getUserOrdersFromVaultOrBinance(
       params.userId,
-      range.startMs,
-      range.endMs
+      false,
+      {
+        startMs: range.startMs,
+        endMs: range.endMs,
+      }
     );
-    const periodOrders = allSynced.filter(
+    const periodOrders = daySynced.filter(
       (o) => o.createTimeMs >= range.startMs && o.createTimeMs <= range.endMs
     );
     const periodLabel = `Cierre Diario: ${range.labelEs} (00:00:00 - 23:59:59 VET)`;
@@ -1986,8 +2136,6 @@ export class P2PAccountingService {
       readonly spotTradingBlocked: boolean;
     };
   }> {
-    await this.ensurePendingDailyClosuresConsolidated(userId);
-
     const [closings, credential] = await Promise.all([
       SupabaseVaultRepository.getUserClosings(userId),
       SupabaseVaultRepository.getBinanceCredential(userId),

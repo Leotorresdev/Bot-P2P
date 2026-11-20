@@ -91,6 +91,7 @@ const SEED_DB_FILE_PATH = path.join(SEED_DATA_DIR, "vault-db.json");
 
 let memoryVaultDb: LocalVaultDatabase | null = null;
 let p2pOrdersHasV2Columns: boolean | null = null;
+let syncStateTableAvailable: boolean | null = null;
 
 function packOrderV2Metadata(o: StoredP2POrderRecord): string {
   const cleanCostBasis =
@@ -183,6 +184,10 @@ function unpackBadgeTaxMeta(raw: unknown): {
 }
 
 function readLocalDb(): LocalVaultDatabase {
+  if (memoryVaultDb) {
+    return memoryVaultDb;
+  }
+
   try {
     const fileToRead = fs.existsSync(DB_FILE_PATH)
       ? DB_FILE_PATH
@@ -191,9 +196,6 @@ function readLocalDb(): LocalVaultDatabase {
       : null;
 
     if (!fileToRead) {
-      if (memoryVaultDb) {
-        return memoryVaultDb;
-      }
       const emptyDb: LocalVaultDatabase = {
         users: [],
         credentials: [],
@@ -222,10 +224,7 @@ function readLocalDb(): LocalVaultDatabase {
     memoryVaultDb = loaded;
     return loaded;
   } catch {
-    if (memoryVaultDb) {
-      return memoryVaultDb;
-    }
-    return {
+    const emptyDb: LocalVaultDatabase = {
       users: [],
       credentials: [],
       orders: [],
@@ -235,18 +234,24 @@ function readLocalDb(): LocalVaultDatabase {
       shiftClosures: [],
       dailyTotalClosures: [],
     };
+    memoryVaultDb = emptyDb;
+    return emptyDb;
   }
 }
 
 function writeLocalDb(db: LocalVaultDatabase): void {
   memoryVaultDb = db;
+  if (process.env.VERCEL) {
+    // En Vercel serverless el almacenamiento primario es Supabase; evitar I/O síncrono de disco
+    return;
+  }
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    fs.writeFileSync(DB_FILE_PATH, JSON.stringify(db, null, 2), "utf8");
+    fs.writeFileSync(DB_FILE_PATH, JSON.stringify(db), "utf8");
   } catch {
-    // En Vercel serverless, el respaldo primario es Supabase y memoryVaultDb/tmpdir
+    // Ignorar fallo local si el filesystem es de solo lectura
   }
 }
 
@@ -458,6 +463,9 @@ export class SupabaseVaultRepository {
       await Promise.all([
         supabase.from("api_credentials").delete().eq("user_id", userId),
         supabase.from("p2p_orders").delete().eq("user_id", userId),
+        syncStateTableAvailable !== false
+          ? supabase.from("p2p_sync_state").delete().eq("user_id", userId)
+          : Promise.resolve(),
       ]);
     } catch {
       // Fallback a bóveda local
@@ -475,6 +483,37 @@ export class SupabaseVaultRepository {
   public static async getUserOrders(
     userId: string
   ): Promise<readonly StoredP2POrderRecord[]> {
+    return this.getUserOrdersInRange(userId);
+  }
+
+  /**
+   * Obtiene órdenes P2P del usuario acotadas a un rango `[startMs, endMs]` usando el índice
+   * `(user_id, create_time_ms DESC)` en PostgreSQL para evitar descargas masivas en cuentas de alto volumen.
+   */
+  public static async getUserOrdersInRange(
+    userId: string,
+    range?: {
+      readonly startMs?: number | null;
+      readonly endMs?: number | null;
+      readonly maxPages?: number;
+    }
+  ): Promise<readonly StoredP2POrderRecord[]> {
+    const startMs =
+      typeof range?.startMs === "number" && Number.isFinite(range.startMs)
+        ? range.startMs
+        : null;
+    const endMs =
+      typeof range?.endMs === "number" && Number.isFinite(range.endMs)
+        ? range.endMs
+        : null;
+    const maxPages = Math.max(1, Math.min(range?.maxPages ?? 50, 100));
+
+    const matchesRange = (ts: number): boolean => {
+      if (startMs !== null && ts < startMs) return false;
+      if (endMs !== null && ts > endMs) return false;
+      return true;
+    };
+
     const parseCreateTimeFallback = (
       label: string,
       createdAtIso?: string
@@ -509,9 +548,15 @@ export class SupabaseVaultRepository {
     };
 
     const normalizeStatusCat = (rawStatus: string): OrderStatusCategory => {
-      const upper = rawStatus.toUpperCase();
+      const upper = rawStatus.trim().toUpperCase();
       if (upper === "COMPLETED" || upper === "4") return "COMPLETED";
-      if (upper.includes("CANCEL") || upper === "6" || upper === "7") {
+      if (
+        upper.includes("CANCEL") ||
+        upper.includes("EXPIRE") ||
+        upper === "6" ||
+        upper === "7" ||
+        upper === "8"
+      ) {
         return "CANCELLED";
       }
       if (upper === "IN_APPEAL" || upper.includes("APPEAL") || upper === "5") {
@@ -559,36 +604,60 @@ export class SupabaseVaultRepository {
             legacy.totalPriceVes ?? unpacked.totalPriceVes ?? "0",
           costBasisRateVes: unpacked.costBasisRateVes,
         } satisfies StoredP2POrderRecord;
-      });
+      })
+      .filter((o) => matchesRange(o.createTimeMs));
     const localMap = new Map(localUserOrders.map((o) => [o.orderNumber, o]));
 
     try {
       const SUPABASE_PAGE_SIZE = 1000;
-      const MAX_SUPABASE_PAGES = 10;
       const allRows: Array<Record<string, unknown>> = [];
 
-      for (let pageIdx = 0; pageIdx < MAX_SUPABASE_PAGES; pageIdx++) {
+      for (let pageIdx = 0; pageIdx < maxPages; pageIdx++) {
         const from = pageIdx * SUPABASE_PAGE_SIZE;
         const to = from + SUPABASE_PAGE_SIZE - 1;
 
-        let queryRes =
-          p2pOrdersHasV2Columns !== false
-            ? await supabase
-                .from("p2p_orders")
-                .select("*")
-                .eq("user_id", userId)
-                .order("create_time_ms", { ascending: false })
-                .range(from, to)
-            : null;
+        let queryRes: {
+          data: unknown[] | null;
+          error: unknown;
+        } | null = null;
+
+        if (p2pOrdersHasV2Columns !== false) {
+          let builder = supabase
+            .from("p2p_orders")
+            .select("*")
+            .eq("user_id", userId);
+          if (startMs !== null) {
+            builder = builder.gte("create_time_ms", startMs);
+          }
+          if (endMs !== null) {
+            builder = builder.lte("create_time_ms", endMs);
+          }
+          queryRes = await builder
+            .order("create_time_ms", { ascending: false })
+            .range(from, to);
+        }
 
         if (!queryRes || queryRes.error) {
           if (queryRes?.error) {
             p2pOrdersHasV2Columns = false;
           }
-          queryRes = await supabase
+          let legacyBuilder = supabase
             .from("p2p_orders")
             .select("*")
-            .eq("user_id", userId)
+            .eq("user_id", userId);
+          if (startMs !== null) {
+            legacyBuilder = legacyBuilder.gte(
+              "created_at",
+              new Date(startMs).toISOString()
+            );
+          }
+          if (endMs !== null) {
+            legacyBuilder = legacyBuilder.lte(
+              "created_at",
+              new Date(endMs).toISOString()
+            );
+          }
+          queryRes = await legacyBuilder
             .order("created_at", { ascending: false })
             .range(from, to);
         } else if (p2pOrdersHasV2Columns === null) {
@@ -622,18 +691,23 @@ export class SupabaseVaultRepository {
                   label,
                   row.created_at ? String(row.created_at) : undefined
                 );
+          const rawRemoteStatus =
+            typeof row.order_status === "string" &&
+            row.order_status.trim() !== ""
+              ? row.order_status.trim()
+              : undefined;
+          // Si existen metadatos v2 empaquetados (escritos en cada upsert de Binance),
+          // evitar que el DEFAULT 'COMPLETED' de Postgres oculte un estado CANCELLED/IN_APPEAL/IN_PROGRESS.
           const orderStatus = String(
-            row.order_status ??
-              unpacked.orderStatus ??
+            (unpacked.isV2Packed && unpacked.orderStatus
+              ? rawRemoteStatus && rawRemoteStatus.toUpperCase() !== "COMPLETED"
+                ? rawRemoteStatus
+                : unpacked.orderStatus
+              : rawRemoteStatus ?? unpacked.orderStatus) ??
               localMatch?.orderStatus ??
               "COMPLETED"
           );
-          const statusCategory = row.order_status
-            ? normalizeStatusCat(orderStatus)
-            : ((row.status_category ??
-                unpacked.statusCategory ??
-                localMatch?.statusCategory ??
-                normalizeStatusCat(orderStatus)) as OrderStatusCategory);
+          const statusCategory = normalizeStatusCat(orderStatus);
 
           const amountStr = String(row.amount_usdt ?? "0");
           const unitPriceStr = String(row.unit_price_ves ?? "0");
@@ -711,6 +785,223 @@ export class SupabaseVaultRepository {
   }
 
   /**
+   * Consulta ultrarrápida (1 fila) del timestamp más reciente de órdenes guardadas para cursor incremental.
+   */
+  public static async getLatestOrderTimestampMs(
+    userId: string
+  ): Promise<number> {
+    try {
+      if (p2pOrdersHasV2Columns !== false) {
+        const { data, error } = await supabase
+          .from("p2p_orders")
+          .select("create_time_ms")
+          .eq("user_id", userId)
+          .order("create_time_ms", { ascending: false })
+          .limit(1);
+
+        if (!error && data && data.length > 0) {
+          p2pOrdersHasV2Columns = true;
+          const ts = Number(
+            (data[0] as Record<string, unknown>)?.create_time_ms ?? 0
+          );
+          if (Number.isFinite(ts) && ts > 0) return ts;
+        } else if (error) {
+          p2pOrdersHasV2Columns = false;
+        }
+      }
+
+      if (p2pOrdersHasV2Columns === false) {
+        const { data, error } = await supabase
+          .from("p2p_orders")
+          .select("created_at")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(1);
+        if (!error && data && data.length > 0) {
+          const parsed = Date.parse(
+            String((data[0] as Record<string, unknown>)?.created_at ?? "")
+          );
+          if (Number.isFinite(parsed) && parsed > 0) return parsed;
+        }
+      }
+    } catch {
+      // Fallback a memoria local
+    }
+
+    const db = readLocalDb();
+    let maxTs = 0;
+    for (const o of db.orders) {
+      if (o.userId === userId && (o.createTimeMs ?? 0) > maxTs) {
+        maxTs = o.createTimeMs ?? 0;
+      }
+    }
+    return maxTs;
+  }
+
+  /**
+   * Consulta ultrarrápida (1 fila) de la orden más antigua en estado no final (`IN_PROGRESS` / `IN_APPEAL`)
+   * dentro de las últimas `lookbackMs` (por defecto 48h) para asegurar que actualice a `COMPLETED`/`CANCELLED`.
+   */
+  public static async getOldestOpenOrderTimestampMs(
+    userId: string,
+    lookbackMs: number = 48 * 3_600_000
+  ): Promise<number | null> {
+    const cutoff = Date.now() - lookbackMs;
+    try {
+      if (p2pOrdersHasV2Columns !== false) {
+        const { data, error } = await supabase
+          .from("p2p_orders")
+          .select("create_time_ms")
+          .eq("user_id", userId)
+          .in("status_category", ["IN_PROGRESS", "IN_APPEAL"])
+          .gte("create_time_ms", cutoff)
+          .order("create_time_ms", { ascending: true })
+          .limit(1);
+
+        if (!error && data && data.length > 0) {
+          const ts = Number(
+            (data[0] as Record<string, unknown>)?.create_time_ms ?? 0
+          );
+          if (Number.isFinite(ts) && ts > 0) return ts;
+          return null;
+        }
+        if (!error) return null;
+      }
+    } catch {
+      // Fallback a memoria local
+    }
+
+    const db = readLocalDb();
+    let oldest: number | null = null;
+    for (const o of db.orders) {
+      if (
+        o.userId === userId &&
+        (o.statusCategory === "IN_PROGRESS" ||
+          o.statusCategory === "IN_APPEAL") &&
+        (o.createTimeMs ?? 0) >= cutoff
+      ) {
+        if (oldest === null || o.createTimeMs < oldest) {
+          oldest = o.createTimeMs;
+        }
+      }
+    }
+    return oldest;
+  }
+
+  /**
+   * Candado y cooldown distribuido en `p2p_sync_state` (degrada graciosamente si la tabla aún no existe).
+   */
+  public static async tryAcquireDistributedSyncLock(
+    userId: string,
+    cooldownMs: number,
+    lockTtlMs: number = 35_000
+  ): Promise<{
+    readonly acquired: boolean;
+    readonly lastOrderCreateMs: number;
+    readonly recentlySynced: boolean;
+  }> {
+    if (syncStateTableAvailable === false) {
+      return { acquired: true, lastOrderCreateMs: 0, recentlySynced: false };
+    }
+
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const lockUntilIso = new Date(nowMs + lockTtlMs).toISOString();
+
+    try {
+      const { data, error } = await supabase
+        .from("p2p_sync_state")
+        .select("last_order_create_ms, lock_until, last_sync_at")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (error) {
+        syncStateTableAvailable = false;
+        return { acquired: true, lastOrderCreateMs: 0, recentlySynced: false };
+      }
+
+      syncStateTableAvailable = true;
+
+      if (data) {
+        const lastOrderCreateMs = Number(data.last_order_create_ms ?? 0) || 0;
+        const lockUntilMs = data.lock_until
+          ? Date.parse(String(data.lock_until))
+          : 0;
+        const lastSyncMs = data.last_sync_at
+          ? Date.parse(String(data.last_sync_at))
+          : 0;
+
+        if (lockUntilMs > nowMs) {
+          return {
+            acquired: false,
+            lastOrderCreateMs,
+            recentlySynced: true,
+          };
+        }
+        if (lastSyncMs > 0 && nowMs - lastSyncMs < cooldownMs) {
+          return {
+            acquired: false,
+            lastOrderCreateMs,
+            recentlySynced: true,
+          };
+        }
+
+        await supabase
+          .from("p2p_sync_state")
+          .update({ lock_until: lockUntilIso })
+          .eq("user_id", userId);
+
+        return {
+          acquired: true,
+          lastOrderCreateMs,
+          recentlySynced: false,
+        };
+      }
+
+      await supabase.from("p2p_sync_state").upsert({
+        user_id: userId,
+        last_order_create_ms: 0,
+        lock_until: lockUntilIso,
+        last_sync_at: null,
+        last_error: null,
+      });
+
+      return { acquired: true, lastOrderCreateMs: 0, recentlySynced: false };
+    } catch {
+      syncStateTableAvailable = false;
+      return { acquired: true, lastOrderCreateMs: 0, recentlySynced: false };
+    }
+  }
+
+  public static async releaseDistributedSyncLock(
+    userId: string,
+    lastOrderCreateMs?: number,
+    errorMessage?: string | null
+  ): Promise<void> {
+    if (syncStateTableAvailable !== true) return;
+    try {
+      const updatePayload: Record<string, unknown> = {
+        lock_until: null,
+        last_sync_at: new Date().toISOString(),
+        last_error: errorMessage ?? null,
+      };
+      if (
+        typeof lastOrderCreateMs === "number" &&
+        Number.isFinite(lastOrderCreateMs) &&
+        lastOrderCreateMs > 0
+      ) {
+        updatePayload.last_order_create_ms = lastOrderCreateMs;
+      }
+      await supabase
+        .from("p2p_sync_state")
+        .update(updatePayload)
+        .eq("user_id", userId);
+    } catch {
+      // Ignorar fallo de liberación; el TTL de lock expirará solo
+    }
+  }
+
+  /**
    * Hace upsert de órdenes P2P sincronizadas de Binance sin destruir días anteriores
    * ni alterar el orden cronológico original.
    */
@@ -719,6 +1010,8 @@ export class SupabaseVaultRepository {
     orders: readonly StoredP2POrderRecord[]
   ): Promise<void> {
     if (orders.length === 0) return;
+
+    let remoteSavedOk = false;
 
     try {
       const fullPayload = orders.map((o) => ({
@@ -746,8 +1039,11 @@ export class SupabaseVaultRepository {
             : new Date().toISOString(),
       }));
 
-      for (let i = 0; i < fullPayload.length; i += 50) {
-        const chunk = fullPayload.slice(i, i + 50);
+      const UPSERT_CHUNK_SIZE = 200;
+      let anyRemoteSuccess = false;
+
+      for (let i = 0; i < fullPayload.length; i += UPSERT_CHUNK_SIZE) {
+        const chunk = fullPayload.slice(i, i + UPSERT_CHUNK_SIZE);
         let needLegacyFallback = p2pOrdersHasV2Columns === false;
 
         if (!needLegacyFallback) {
@@ -757,6 +1053,7 @@ export class SupabaseVaultRepository {
             needLegacyFallback = true;
           } else {
             p2pOrdersHasV2Columns = true;
+            anyRemoteSuccess = true;
           }
         }
 
@@ -776,11 +1073,22 @@ export class SupabaseVaultRepository {
             cost_basis_rate_ves: c.cost_basis_rate_ves,
             created_at: c.created_at,
           }));
-          await supabase.from("p2p_orders").upsert(legacyChunk);
+          const { error: legacyErr } = await supabase
+            .from("p2p_orders")
+            .upsert(legacyChunk);
+          if (!legacyErr) {
+            anyRemoteSuccess = true;
+          }
         }
       }
+      remoteSavedOk = anyRemoteSuccess;
     } catch {
       // Fallback a archivo local
+    }
+
+    // En Vercel serverless, si Supabase persistió correctamente, no duplicar miles de órdenes en memoria/disco
+    if (process.env.VERCEL && remoteSavedOk) {
+      return;
     }
 
     const db = readLocalDb();

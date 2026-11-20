@@ -31,22 +31,21 @@ import {
   getStatusCategoryBadgeStyle,
   getTradeTypeBadgeStyle,
 } from "@/lib/format-currency";
-import {
-  formatVetOrderTimestamp,
-  getCurrentVetDateIso,
-} from "@/lib/timezone-utc4";
+import { getCurrentVetDateIso } from "@/lib/timezone-utc4";
 import { cn } from "@/lib/utils";
 
 function formatElapsedDuration(startMs: number, nowMs: number): string {
   const diffSec = Math.max(0, Math.floor((nowMs - startMs) / 1000));
-  const hours = Math.floor(diffSec / 3600);
+  const days = Math.floor(diffSec / 86_400);
+  const hours = Math.floor((diffSec % 86_400) / 3600);
   const mins = Math.floor((diffSec % 3600) / 60);
   const secs = diffSec % 60;
-  return [
+  const hms = [
     String(hours).padStart(2, "0"),
     String(mins).padStart(2, "0"),
     String(secs).padStart(2, "0"),
   ].join(":");
+  return days > 0 ? `${days}d ${hms}` : hms;
 }
 
 export interface ShiftControlPanelProps {
@@ -82,31 +81,17 @@ export function ShiftControlPanel({
   const shiftState = shiftStateQuery.data;
   const activeShift = shiftState?.activeShift ?? null;
   const todayShifts = shiftState?.todayShifts ?? [];
-  const todayTotalClosure = shiftState?.todayTotalClosure ?? null;
   const nextShiftNumber = shiftState?.nextShiftNumber ?? 1;
 
-  // Reloj en vivo + auto-cierre de seguridad a las 23:59:59 VET
-  const autoClosingTriggeredRef = React.useRef<string | null>(null);
+  // Reloj en vivo únicamente cuando hay una jornada abierta (cierre 100% manual, soporta varios días)
   React.useEffect(() => {
+    if (!activeShift) return;
+    setNowMs(Date.now());
     const timer = setInterval(() => {
-      const current = Date.now();
-      setNowMs(current);
-
-      if (activeShift) {
-        const vetNow = formatVetOrderTimestamp(current);
-        const isAt235959 = vetNow.timeLabel === "23:59:59";
-        const isDayChanged = vetNow.dateIso > activeShift.dateIsoVet;
-        if (
-          (isAt235959 || isDayChanged) &&
-          autoClosingTriggeredRef.current !== activeShift.shiftId
-        ) {
-          autoClosingTriggeredRef.current = activeShift.shiftId;
-          void shiftStateQuery.refetch();
-        }
-      }
+      setNowMs(Date.now());
     }, 1000);
     return () => clearInterval(timer);
-  }, [activeShift, shiftStateQuery]);
+  }, [activeShift]);
 
   const handleStartShift = async () => {
     if (activeShift || startShiftMutation.isPending) return;
@@ -191,47 +176,6 @@ export function ShiftControlPanel({
     }
   };
 
-  const handleDownloadDailyConsolidated = async (
-    dateIso: string,
-    format: "xlsx" | "pdf" | "csv"
-  ) => {
-    const key = `daily-${dateIso}-${format}`;
-    setDownloadingId(key);
-    try {
-      const params = new URLSearchParams({
-        scope: "DAY",
-        date: dateIso,
-        format,
-      });
-      const res = await fetch(`/api/p2p/export-closing?${params.toString()}`, {
-        method: "GET",
-        credentials: "same-origin",
-      });
-      if (!res.ok) {
-        throw new Error("No se pudo generar el consolidado diario.");
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `Cierre_Total_Dia_${dateIso}.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setFeedbackBanner({
-        type: "error",
-        message:
-          err instanceof Error
-            ? err.message
-            : "Error descargando el consolidado del día.",
-      });
-    } finally {
-      setDownloadingId(null);
-    }
-  };
-
   return (
     <div className="flex flex-col gap-2.5">
       {/* BARRA PRINCIPAL DE CONTROL DE JORNADA (INICIAR / CERRAR / MIS CIERRES DE HOY) */}
@@ -253,9 +197,9 @@ export function ShiftControlPanel({
               </span>
               <div className="flex flex-col">
                 <span className="text-xs font-extrabold text-slate-900 dark:text-[#EAECEF]">
-                  Jornada activa desde las{" "}
+                  Jornada activa desde{" "}
                   <span className="font-mono text-emerald-700 dark:text-[#0ECB81]">
-                    {activeShift.startTimeVetLabel}
+                    {activeShift.dateLabelVet} · {activeShift.startTimeVetLabel}
                   </span>{" "}
                   (VET)
                 </span>
@@ -264,7 +208,7 @@ export function ShiftControlPanel({
                   <strong className="font-mono tabular-nums text-slate-700 dark:text-[#EAECEF]">
                     {formatElapsedDuration(activeShift.shiftStartTimeMs, nowMs)}
                   </strong>{" "}
-                  · Contabilizando solo órdenes desde este inicio
+                  · Cierre manual (permanece abierta hasta que presiones Cerrar)
                 </span>
               </div>
             </div>
@@ -279,8 +223,8 @@ export function ShiftControlPanel({
                   Panel en 0.00 · Listo para iniciar Jornada #{nextShiftNumber}
                 </span>
                 <span className="text-[11px] font-medium text-slate-500 dark:text-[#848E9C]">
-                  Presiona «Iniciar Jornada» para empezar el contador desde cero
-                  (auto-cierre diario 11:59:59 PM VET)
+                  Presiona «Iniciar Jornada» para iniciar desde cero. Solo se
+                  cierra cuando pulses «Cerrar Jornada».
                 </span>
               </div>
             </div>
@@ -408,19 +352,20 @@ export function ShiftControlPanel({
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 dark:border-[#2B3139]">
             <div>
               <h3 className="text-sm font-extrabold text-slate-900 dark:text-[#EAECEF]">
-                Mis Cierres Parciales por Jornada &amp; Consolidado Diario
+                Mis Cierres de Jornada (Inicio y Fin Manual)
               </h3>
               <p className="text-[11px] text-slate-500 dark:text-[#848E9C]">
-                Cada vez que presionas «Cerrar Jornada» se guarda un corte
-                individual. A las 11:59:59 PM VET todos los cierres del día se
-                suman en el Cierre Total del Día.
+                Cada vez que presionas «Cerrar Jornada» se guarda el corte
+                exacto del periodo abierto (sin límite de horario). Los libros
+                contables diarios, semanales y mensuales se calculan aparte
+                sobre tus transacciones calendario.
               </p>
             </div>
 
             <div className="flex items-center gap-2">
               <label className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-700 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF]">
                 <Calendar className="h-3.5 w-3.5 text-emerald-600 dark:text-[#FCD535]" />
-                <span>Fecha:</span>
+                <span>Fecha de cierre:</span>
                 <input
                   type="date"
                   value={selectedHistoryDate}
@@ -431,133 +376,7 @@ export function ShiftControlPanel({
             </div>
           </div>
 
-          {/* Tarjeta del Cierre Total del Día Consolidado (Suma de todas las jornadas del día) */}
-          {todayTotalClosure && (
-            <div className="flex flex-col gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3.5 dark:border-[#0ECB81]/30 dark:bg-[#0ECB81]/5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="rounded-lg bg-emerald-600 px-2 py-0.5 text-[10px] font-extrabold uppercase text-white dark:bg-[#0ECB81] dark:text-[#0B0E11]">
-                    Cierre Total del Día (Consolidado)
-                  </span>
-                  <span className="font-mono text-xs font-bold text-slate-800 dark:text-[#EAECEF]">
-                    {todayTotalClosure.dateLabelVet} ·{" "}
-                    {todayTotalClosure.shiftsCount}{" "}
-                    {todayTotalClosure.shiftsCount === 1
-                      ? "jornada cerrada"
-                      : "jornadas cerradas"}
-                  </span>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void handleDownloadDailyConsolidated(
-                        todayTotalClosure.dateIsoVet,
-                        "xlsx"
-                      )
-                    }
-                    disabled={downloadingId !== null}
-                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-extrabold text-white hover:bg-emerald-500 disabled:opacity-60 dark:bg-[#0ECB81] dark:text-[#0B0E11]"
-                  >
-                    <FileSpreadsheet className="h-3 w-3" />
-                    <span>Excel Día</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void handleDownloadDailyConsolidated(
-                        todayTotalClosure.dateIsoVet,
-                        "pdf"
-                      )
-                    }
-                    disabled={downloadingId !== null}
-                    className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-800 hover:bg-slate-50 disabled:opacity-60 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF]"
-                  >
-                    <FileText className="h-3 w-3" />
-                    <span>PDF Día</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                <div className="rounded-lg border border-black/5 bg-white/90 px-2.5 py-1.5 dark:border-[#2B3139] dark:bg-[#181A20]">
-                  <p className="text-[10px] font-bold text-slate-500 dark:text-[#848E9C]">
-                    Total Comprado Día
-                  </p>
-                  <p className="font-mono text-xs font-extrabold tabular-nums text-emerald-700 dark:text-[#0ECB81]">
-                    {formatUsdtAmount(todayTotalClosure.summary.totalBoughtUsdt)}
-                  </p>
-                  <p className="font-mono text-[10px] tabular-nums text-slate-600 dark:text-[#848E9C]">
-                    {formatVesAmount(todayTotalClosure.summary.totalBoughtVes)}
-                  </p>
-                </div>
-
-                <div className="rounded-lg border border-black/5 bg-white/90 px-2.5 py-1.5 dark:border-[#2B3139] dark:bg-[#181A20]">
-                  <p className="text-[10px] font-bold text-slate-500 dark:text-[#848E9C]">
-                    Total Vendido Día
-                  </p>
-                  <p className="font-mono text-xs font-extrabold tabular-nums text-rose-700 dark:text-[#F6465D]">
-                    {formatUsdtAmount(todayTotalClosure.summary.totalSoldUsdt)}
-                  </p>
-                  <p className="font-mono text-[10px] tabular-nums text-slate-600 dark:text-[#848E9C]">
-                    {formatVesAmount(todayTotalClosure.summary.totalSoldVes)}
-                  </p>
-                </div>
-
-                <div className="rounded-lg border border-black/5 bg-white/90 px-2.5 py-1.5 dark:border-[#2B3139] dark:bg-[#181A20]">
-                  <p className="text-[10px] font-bold text-slate-500 dark:text-[#848E9C]">
-                    Vol. Movido Día
-                  </p>
-                  <p className="font-mono text-xs font-extrabold tabular-nums text-slate-900 dark:text-[#EAECEF]">
-                    {formatUsdtAmount(todayTotalClosure.summary.totalVolumeUsdt)}
-                  </p>
-                  <p className="text-[10px] text-slate-500 dark:text-[#848E9C]">
-                    {todayTotalClosure.orders.length} órdenes totales
-                  </p>
-                </div>
-
-                <div className="rounded-lg border border-black/5 bg-white/90 px-2.5 py-1.5 dark:border-[#2B3139] dark:bg-[#181A20]">
-                  <p className="text-[10px] font-bold text-slate-500 dark:text-[#848E9C]">
-                    Promedios &amp; Brecha Día
-                  </p>
-                  <p className="font-mono text-xs font-extrabold tabular-nums text-slate-900 dark:text-[#EAECEF]">
-                    {todayTotalClosure.summary.brechaPointsVes} pts
-                  </p>
-                  <p className="font-mono text-[10px] tabular-nums text-slate-500 dark:text-[#848E9C]">
-                    C: {todayTotalClosure.summary.activeAvgBuyRateVes} | V:{" "}
-                    {todayTotalClosure.summary.activeAvgSellRateVes}
-                  </p>
-                </div>
-
-                <div className="rounded-lg border border-black/5 bg-white/90 px-2.5 py-1.5 dark:border-[#2B3139] dark:bg-[#181A20]">
-                  <p className="text-[10px] font-bold text-slate-500 dark:text-[#848E9C]">
-                    Comisión Total Día
-                  </p>
-                  <p className="font-mono text-xs font-extrabold tabular-nums text-amber-700 dark:text-[#FCD535]">
-                    -{formatUsdtAmount(todayTotalClosure.summary.volumeCommissionUsdt)}
-                  </p>
-                  <p className="font-mono text-[10px] tabular-nums text-slate-600 dark:text-[#848E9C]">
-                    -{formatVesAmount(todayTotalClosure.summary.volumeCommissionVes)}
-                  </p>
-                </div>
-
-                <div className="rounded-lg border border-emerald-300/80 bg-emerald-100/60 px-2.5 py-1.5 dark:border-[#0ECB81]/40 dark:bg-[#0ECB81]/15">
-                  <p className="text-[10px] font-extrabold text-emerald-900 dark:text-[#0ECB81]">
-                    Ganancia Neta Día
-                  </p>
-                  <p className="font-mono text-xs font-extrabold tabular-nums text-emerald-800 dark:text-[#0ECB81]">
-                    {formatUsdtAmount(todayTotalClosure.summary.netProfitUsdt)}
-                  </p>
-                  <p className="font-mono text-[10px] font-bold tabular-nums text-emerald-900 dark:text-[#EAECEF]">
-                    {formatVesAmount(todayTotalClosure.summary.netProfitVes)}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Lista de Cierres Parciales del Día (Jornada 1, Jornada 2, ...) */}
+          {/* Lista de Cierres de Jornada (Jornada 1, Jornada 2, ...) */}
           {todayShifts.length === 0 ? (
             <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 py-8 text-center dark:border-[#2B3139]">
               <Clock className="h-6 w-6 text-slate-400 dark:text-[#848E9C]" />

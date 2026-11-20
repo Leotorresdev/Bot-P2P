@@ -74,13 +74,16 @@ export function useP2PSummaryQuery(params: P2PSummaryQueryParams) {
       const json = await res.json();
       return json.data;
     },
-    refetchInterval: 30_000,
+    staleTime: 20_000,
+    refetchInterval: params.period === "TODAY" ? 30_000 : false,
+    refetchIntervalInBackground: false,
   });
 }
 
 export function useVenezuelanBanksQuery(
   buyAmount: number = 100_000,
-  sellAmount: number = 100_000
+  sellAmount: number = 100_000,
+  options?: { readonly enabled?: boolean }
 ) {
   return useQuery({
     queryKey: p2pQueryKeys.banks(buyAmount, sellAmount),
@@ -97,7 +100,10 @@ export function useVenezuelanBanksQuery(
       const json = await res.json();
       return json.data;
     },
-    refetchInterval: 12_000,
+    enabled: options?.enabled ?? true,
+    staleTime: 15_000,
+    refetchInterval: 20_000,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -120,7 +126,9 @@ export function useP2PChartDataQuery(
       const json = await res.json();
       return json.data;
     },
-    refetchInterval: 20_000,
+    staleTime: 30_000,
+    refetchInterval: 45_000,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -170,7 +178,9 @@ export function useP2POrdersQuery(params: P2POrdersQueryParams) {
       const json = await res.json();
       return json.data;
     },
-    refetchInterval: 30_000,
+    staleTime: 20_000,
+    refetchInterval: effectivePeriod === "TODAY" ? 30_000 : false,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -396,7 +406,9 @@ export function useShiftStateQuery(date?: string) {
       const json = await res.json();
       return json.data;
     },
-    refetchInterval: 15_000,
+    staleTime: 20_000,
+    refetchInterval: 45_000,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -417,7 +429,15 @@ export function useStartShiftMutation() {
       return json;
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
+      void queryClient.invalidateQueries({
+        queryKey: [...p2pQueryKeys.all, "shifts"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [...p2pQueryKeys.all, "summary"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [...p2pQueryKeys.all, "orders"],
+      });
     },
   });
 }
@@ -439,7 +459,15 @@ export function useCloseShiftMutation() {
       return json;
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: p2pQueryKeys.all });
+      void queryClient.invalidateQueries({
+        queryKey: [...p2pQueryKeys.all, "shifts"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [...p2pQueryKeys.all, "summary"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [...p2pQueryKeys.all, "orders"],
+      });
     },
   });
 }

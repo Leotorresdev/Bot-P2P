@@ -64,6 +64,19 @@ ALTER TABLE public.p2p_orders ADD COLUMN IF NOT EXISTS create_time_ms BIGINT NOT
 CREATE INDEX IF NOT EXISTS idx_p2p_orders_user_create_time
   ON public.p2p_orders (user_id, create_time_ms DESC, order_number DESC);
 
+CREATE INDEX IF NOT EXISTS idx_p2p_orders_open_status
+  ON public.p2p_orders (user_id, create_time_ms ASC)
+  WHERE status_category IN ('IN_PROGRESS', 'IN_APPEAL');
+
+-- Estado de sincronización y candado distribuido para cuentas de alto volumen
+CREATE TABLE IF NOT EXISTS public.p2p_sync_state (
+  user_id TEXT PRIMARY KEY REFERENCES public.p2p_users(id) ON DELETE CASCADE,
+  last_order_create_ms BIGINT NOT NULL DEFAULT 0,
+  lock_until TIMESTAMPTZ,
+  last_sync_at TIMESTAMPTZ,
+  last_error TEXT
+);
+
 -- 4. Tabla de Actas de Cierre Diario (11:59 PM VET)
 CREATE TABLE IF NOT EXISTS public.daily_closings (
   id TEXT PRIMARY KEY,
@@ -180,6 +193,7 @@ ALTER TABLE public.p2p_hourly_candles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.p2p_active_shifts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.p2p_shift_closures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.p2p_daily_total_closures ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.p2p_sync_state ENABLE ROW LEVEL SECURITY;
 
 -- Políticas permisivas para la API Backend
 DROP POLICY IF EXISTS "Allow Backend MVP Access Users" ON public.p2p_users;
@@ -209,6 +223,9 @@ CREATE POLICY "Allow Backend MVP Access ShiftClosures" ON public.p2p_shift_closu
 DROP POLICY IF EXISTS "Allow Backend MVP Access DailyTotalClosures" ON public.p2p_daily_total_closures;
 CREATE POLICY "Allow Backend MVP Access DailyTotalClosures" ON public.p2p_daily_total_closures FOR ALL TO public USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow Backend MVP Access SyncState" ON public.p2p_sync_state;
+CREATE POLICY "Allow Backend MVP Access SyncState" ON public.p2p_sync_state FOR ALL TO public USING (true) WITH CHECK (true);
+
 GRANT ALL ON TABLE public.p2p_users TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.api_credentials TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.p2p_orders TO anon, authenticated, service_role;
@@ -218,6 +235,7 @@ GRANT ALL ON TABLE public.p2p_hourly_candles TO anon, authenticated, service_rol
 GRANT ALL ON TABLE public.p2p_active_shifts TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.p2p_shift_closures TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.p2p_daily_total_closures TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.p2p_sync_state TO anon, authenticated, service_role;
 
 -- 8. Recolección 24/7 Automática en la Nube (Opcional con pg_cron + pg_net en Supabase)
 -- Activa las extensiones pg_cron y pg_net en Dashboard -> Database -> Extensions y ejecuta:

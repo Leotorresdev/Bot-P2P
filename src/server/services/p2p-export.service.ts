@@ -84,7 +84,7 @@ export async function buildClosingWorkbookXlsx(
   ws.mergeCells("A2:K2");
   const sec1Header = ws.getCell("A2");
   sec1Header.value = isMonthReport
-    ? `SECCIÓN 1 — RESUMEN GENERAL DEL MES (${dailyClosures.length} DÍAS CERRADOS • ${report.totalShiftsInPeriod ?? 0} JORNADAS) • ${avgLabel}`
+    ? `SECCIÓN 1 — RESUMEN GENERAL DEL MES (${dailyClosures.length} DÍAS CON ACTIVIDAD • ${s.totalOrdersInPeriod} ÓRDENES) • ${avgLabel}`
     : `SECCIÓN 1 — RESUMEN DE GANANCIAS E INSIGNIA APLICADA (${badgeMeta.label.toUpperCase()} ${badgeMeta.feeLabel}) • ${avgLabel}`;
   sec1Header.font = { bold: true, size: 10, color: { argb: "FF065F46" } };
   sec1Header.fill = {
@@ -102,9 +102,9 @@ export async function buildClosingWorkbookXlsx(
     [
       "Insignia Aplicada",
       `${badgeMeta.label} (${badgeMeta.feeLabel})`,
-      isMonthReport ? "Días y Jornadas Consolidadas" : "Total Órdenes Período",
+      isMonthReport ? "Actividad del Mes" : "Total Órdenes Período",
       isMonthReport
-        ? `${dailyClosures.length} días cerrados · ${report.totalShiftsInPeriod ?? 0} jornadas (${s.totalOrdersInPeriod} órdenes)`
+        ? `${dailyClosures.length} días con actividad · ${s.totalOrdersInPeriod} órdenes (${s.reconciledOrdersCount} completadas)`
         : `${s.totalOrdersInPeriod} (${s.reconciledOrdersCount} completadas)`,
     ],
     ["Volumen Total Vendido", `${s.totalSoldUsdt} USDT`, "Total Bs. Recibidos (Ventas)", `${s.totalSoldVes} Bs.`],
@@ -176,7 +176,7 @@ export async function buildClosingWorkbookXlsx(
     ws.mergeCells(`A${currentRowIdx}:K${currentRowIdx}`);
     const dailySecHeader = ws.getCell(`A${currentRowIdx}`);
     dailySecHeader.value =
-      "SECCIÓN 2 — TABLA DE CIERRES DIARIOS DEL MES (DÍA POR DÍA • CONSOLIDADO DE JORNADAS)";
+      "SECCIÓN 2 — RESUMEN DIARIO DEL MES (DÍA POR DÍA • TRANSACCIONES CALENDARIO VET)";
     dailySecHeader.font = { bold: true, size: 10, color: { argb: "FFFFFFFF" } };
     dailySecHeader.fill = {
       type: "pattern",
@@ -194,7 +194,7 @@ export async function buildClosingWorkbookXlsx(
     const dailyHeaderRow = ws.getRow(currentRowIdx);
     dailyHeaderRow.values = [
       "Fecha (VET)",
-      "Jornadas",
+      "Órdenes",
       "Insignia",
       "Comprado (USDT / Bs)",
       "Vendido (USDT / Bs)",
@@ -238,7 +238,7 @@ export async function buildClosingWorkbookXlsx(
         const dRow = ws.getRow(currentRowIdx);
         dRow.values = [
           dayClosure.dateLabelVet,
-          `${dayClosure.shiftsCount} ${dayClosure.shiftsCount === 1 ? "jornada" : "jornadas"}`,
+          `${ds.reconciledOrdersCount} comp. / ${dayClosure.orders.length} tot.`,
           dayClosure.merchantBadgeLabel,
           `${ds.totalBoughtUsdt} USDT (${ds.totalBoughtVes} Bs)`,
           `${ds.totalSoldUsdt} USDT (${ds.totalSoldVes} Bs)`,

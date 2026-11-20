@@ -143,7 +143,9 @@ interface CachedBrechasEntry {
 }
 
 const BRECHAS_CACHE = new Map<string, CachedBrechasEntry>();
-const CACHE_TTL_MS = 8_000; // 8 segundos de caché para optimizar velocidad y evitar rate-limits
+const BRECHAS_IN_FLIGHT = new Map<string, Promise<readonly BankLiveMonitorDto[]>>();
+const CACHE_TTL_MS = 15_000; // 15 segundos de caché + deduplicación en vuelo para evitar rate-limits
+const MAX_BRECHAS_CACHE_ENTRIES = 25;
 
 const BANK_CONFIG: readonly {
   bankName: VenezuelanBank;
@@ -332,99 +334,120 @@ export class BinanceP2PLiveService {
       return cached.data;
     }
 
-    // 2. Consulta concurrente para los bancos
-    const results = await Promise.all(
-      BANK_CONFIG.map(async (config) => {
-        // En Binance C2C search:
-        // 'BUY' = anuncios donde usuarios compran USDT (merchants venden USDT) => cotizado con sellAmount
-        // 'SELL' = anuncios donde usuarios venden USDT (merchants compran USDT) => cotizado con buyAmount
-        const [sellAdSide, buyAdSide] = await Promise.all([
-          fetchBinanceSide("BUY", config.payType, cleanSellAmount),
-          fetchBinanceSide("SELL", config.payType, cleanBuyAmount),
-        ]);
+    // 1b. Deduplicar peticiones simultáneas para el mismo monto (ej. /banks + /chart-data)
+    const inFlight = BRECHAS_IN_FLIGHT.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
 
-        let buyRate1stNum = buyAdSide?.price;
-        let sellRate1stNum = sellAdSide?.price;
-        let merchantBuy = buyAdSide?.nick ?? "Comerciante P2P";
-        let merchantSell = sellAdSide?.nick ?? "Comerciante P2P";
-        let isLive = Boolean(buyAdSide && sellAdSide);
+    const fetchPromise = (async (): Promise<readonly BankLiveMonitorDto[]> => {
+      try {
+        // 2. Consulta concurrente para los bancos
+        const results = await Promise.all(
+          BANK_CONFIG.map(async (config) => {
+            // En Binance C2C search:
+            // 'BUY' = anuncios donde usuarios compran USDT (merchants venden USDT) => cotizado con sellAmount
+            // 'SELL' = anuncios donde usuarios venden USDT (merchants compran USDT) => cotizado con buyAmount
+            const [sellAdSide, buyAdSide] = await Promise.all([
+              fetchBinanceSide("BUY", config.payType, cleanSellAmount),
+              fetchBinanceSide("SELL", config.payType, cleanBuyAmount),
+            ]);
 
-        // Fallback resiliente con CriptoYa API pública de Binance P2P si Binance C2C directa no responde
-        if (!buyRate1stNum || !sellRate1stNum) {
-          const criptoYa = await fetchCriptoYaP2P();
-          if (criptoYa && criptoYa.ask > 0 && criptoYa.bid > 0) {
-            sellRate1stNum = new Decimal(criptoYa.ask)
-              .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
-              .toNumber();
-            buyRate1stNum = new Decimal(criptoYa.bid)
-              .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
-              .toNumber();
-            merchantBuy = "Binance_P2P_CriptoYa";
-            merchantSell = "Binance_P2P_CriptoYa";
-            isLive = true;
-          } else {
-            const baseRate = 1080.0 + (cleanBuyAmount > 100000 ? 5.0 : 0);
-            buyRate1stNum = baseRate;
-            sellRate1stNum =
-              baseRate + (config.bankName === "Pago Móvil" ? 6.5 : 4.8);
-            merchantBuy = "P2P_Merchant_Buy";
-            merchantSell = "P2P_Merchant_Sell";
-            isLive = false;
+            let buyRate1stNum = buyAdSide?.price;
+            let sellRate1stNum = sellAdSide?.price;
+            let merchantBuy = buyAdSide?.nick ?? "Comerciante P2P";
+            let merchantSell = sellAdSide?.nick ?? "Comerciante P2P";
+            let isLive = Boolean(buyAdSide && sellAdSide);
+
+            // Fallback resiliente con CriptoYa API pública de Binance P2P si Binance C2C directa no responde
+            if (!buyRate1stNum || !sellRate1stNum) {
+              const criptoYa = await fetchCriptoYaP2P();
+              if (criptoYa && criptoYa.ask > 0 && criptoYa.bid > 0) {
+                sellRate1stNum = new Decimal(criptoYa.ask)
+                  .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+                  .toNumber();
+                buyRate1stNum = new Decimal(criptoYa.bid)
+                  .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+                  .toNumber();
+                merchantBuy = "Binance_P2P_CriptoYa";
+                merchantSell = "Binance_P2P_CriptoYa";
+                isLive = true;
+              } else {
+                const baseRate = 1080.0 + (cleanBuyAmount > 100000 ? 5.0 : 0);
+                buyRate1stNum = baseRate;
+                sellRate1stNum =
+                  baseRate + (config.bankName === "Pago Móvil" ? 6.5 : 4.8);
+                merchantBuy = "P2P_Merchant_Buy";
+                merchantSell = "P2P_Merchant_Sell";
+                isLive = false;
+              }
+            }
+
+            const buyDec = new Decimal(buyRate1stNum).toDecimalPlaces(
+              2,
+              Decimal.ROUND_HALF_UP
+            );
+            const sellDec = new Decimal(sellRate1stNum).toDecimalPlaces(
+              2,
+              Decimal.ROUND_HALF_UP
+            );
+            const rawBrecha = sellDec.minus(buyDec);
+            const brechaDec = rawBrecha.toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+            const normalizedBrecha = brechaDec.isZero()
+              ? new Decimal(0)
+              : brechaDec;
+            const spreadDec = buyDec.gt(0)
+              ? rawBrecha
+                  .div(buyDec)
+                  .mul(100)
+                  .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+              : new Decimal(0);
+            const normalizedSpread = spreadDec.isZero()
+              ? new Decimal(0)
+              : spreadDec;
+
+            return {
+              bankName: config.bankName,
+              filterAmountVes: cleanBuyAmount,
+              buyFilterAmountVes: cleanBuyAmount,
+              sellFilterAmountVes: cleanSellAmount,
+              buyRate2nd: buyDec.toFixed(2),
+              sellRate2nd: sellDec.toFixed(2),
+              brechaPointsVes: `${normalizedBrecha.gte(0) ? "+" : ""}${normalizedBrecha.toFixed(2)}`,
+              spreadPercent: `${normalizedSpread.gte(0) ? "+" : ""}${normalizedSpread.toFixed(2)}%`,
+              merchantBuyNick: merchantBuy,
+              merchantSellNick: merchantSell,
+              liveRateVes: sellDec.toFixed(2),
+              reconciledOrdersToday: config.defaultOrdersToday,
+              volumeVesToday: config.defaultVolumeVes,
+              isLiveApi: isLive,
+            } satisfies BankLiveMonitorDto;
+          })
+        );
+
+        // Guardar en caché acotado (evita crecimiento ilimitado en memoria)
+        if (BRECHAS_CACHE.size >= MAX_BRECHAS_CACHE_ENTRIES) {
+          const oldestKey = BRECHAS_CACHE.keys().next().value;
+          if (oldestKey !== undefined) {
+            BRECHAS_CACHE.delete(oldestKey);
           }
         }
+        BRECHAS_CACHE.set(cacheKey, {
+          timestamp: Date.now(),
+          data: results,
+        });
 
-        const buyDec = new Decimal(buyRate1stNum).toDecimalPlaces(
-          2,
-          Decimal.ROUND_HALF_UP
-        );
-        const sellDec = new Decimal(sellRate1stNum).toDecimalPlaces(
-          2,
-          Decimal.ROUND_HALF_UP
-        );
-        const rawBrecha = sellDec.minus(buyDec);
-        const brechaDec = rawBrecha.toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
-        const normalizedBrecha = brechaDec.isZero()
-          ? new Decimal(0)
-          : brechaDec;
-        const spreadDec = buyDec.gt(0)
-          ? rawBrecha
-              .div(buyDec)
-              .mul(100)
-              .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
-          : new Decimal(0);
-        const normalizedSpread = spreadDec.isZero()
-          ? new Decimal(0)
-          : spreadDec;
+        // Registrar muestra en la vela de 5 minutos actual (throttled a 15s o nuevo bloque de 5m)
+        void this.recordHourlySamplesFromBrechas(results, false);
 
-        return {
-          bankName: config.bankName,
-          filterAmountVes: cleanBuyAmount,
-          buyFilterAmountVes: cleanBuyAmount,
-          sellFilterAmountVes: cleanSellAmount,
-          buyRate2nd: buyDec.toFixed(2),
-          sellRate2nd: sellDec.toFixed(2),
-          brechaPointsVes: `${normalizedBrecha.gte(0) ? "+" : ""}${normalizedBrecha.toFixed(2)}`,
-          spreadPercent: `${normalizedSpread.gte(0) ? "+" : ""}${normalizedSpread.toFixed(2)}%`,
-          merchantBuyNick: merchantBuy,
-          merchantSellNick: merchantSell,
-          liveRateVes: sellDec.toFixed(2),
-          reconciledOrdersToday: config.defaultOrdersToday,
-          volumeVesToday: config.defaultVolumeVes,
-          isLiveApi: isLive,
-        } satisfies BankLiveMonitorDto;
-      })
-    );
+        return results;
+      } finally {
+        BRECHAS_IN_FLIGHT.delete(cacheKey);
+      }
+    })();
 
-    // Guardar en caché
-    BRECHAS_CACHE.set(cacheKey, {
-      timestamp: now,
-      data: results,
-    });
-
-    // Registrar muestra en la vela de 5 minutos actual (throttled a 15s o nuevo bloque de 5m)
-    void this.recordHourlySamplesFromBrechas(results, false);
-
-    return results;
+    BRECHAS_IN_FLIGHT.set(cacheKey, fetchPromise);
+    return fetchPromise;
   }
 
   /**

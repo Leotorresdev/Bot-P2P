@@ -231,7 +231,9 @@ export function BentoModulesGrid({
   const taxConfigQuery = useTaxConfigQuery();
   const updateBadgeMutation = useUpdateMerchantBadgeMutation();
   const updateTaxConfigMutation = useUpdateTaxConfigMutation();
-  const banksQuery = useVenezuelanBanksQuery(buyBrechaAmount, sellBrechaAmount);
+  const banksQuery = useVenezuelanBanksQuery(buyBrechaAmount, sellBrechaAmount, {
+    enabled: !hideLiveMarketSection,
+  });
 
   const summary = summaryQuery.data;
   const banks = banksQuery.data ?? [];
@@ -731,7 +733,7 @@ export function BentoModulesGrid({
           <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500 dark:text-[#848E9C]">
             <span className="inline-flex items-center gap-1">
               <Clock className="h-3 w-3" />
-              Cierre {summary?.nextClosingTimeVet ?? "23:59 VET"}
+              {summary?.nextClosingTimeVet ?? "Cierre Manual"}
             </span>
             <button
               type="button"
