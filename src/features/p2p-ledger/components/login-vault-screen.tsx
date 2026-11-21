@@ -11,6 +11,7 @@ import {
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
 import { useLedgerUiStore } from "@/features/p2p-ledger/store/use-ledger-ui-store";
 import { FinanceLogo } from "@/components/ui/finance-logo";
+import { InstallAppButton } from "@/components/ui/install-app-button";
 import { Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -89,6 +90,7 @@ export function LoginVaultScreen() {
     try {
       const res = await fetch("/api/p2p/login-vault", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...values, role: "OPERATOR" }),
       });
@@ -274,6 +276,7 @@ export function LoginVaultScreen() {
       <section className="flex flex-1 flex-col justify-between bg-[#F6F8F7] px-6 py-10 sm:px-16">
         {/* Barra Superior Derecha */}
         <div className="flex w-full flex-wrap items-center justify-end gap-2.5">
+          <InstallAppButton variant="pill" />
           <Link
             href="/planes"
             className="inline-flex items-center gap-1.5 rounded-full border border-[#2B3139] bg-[#0B0E11] px-3.5 py-[6px] font-sans text-[11px] font-bold leading-[14px] text-[#FCD535] shadow-sm transition-all hover:border-[#F0B90B] hover:bg-[#181A20]"

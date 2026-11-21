@@ -25,6 +25,7 @@ import { useThemeStore } from "@/features/p2p-ledger/store/use-theme-store";
 import { UnlockAccountantModal } from "@/features/p2p-ledger/components/unlock-accountant-modal";
 import { useQueryClient } from "@tanstack/react-query";
 import { FinanceLogo } from "@/components/ui/finance-logo";
+import { InstallAppButton } from "@/components/ui/install-app-button";
 import { cn } from "@/lib/utils";
 
 export function TopNavigationBar() {
@@ -52,13 +53,18 @@ export function TopNavigationBar() {
   const handleLogout = async () => {
     setIsLoggingOut(true);
     try {
-      await fetch("/api/p2p/logout", { method: "POST" });
+      await fetch("/api/p2p/logout", {
+        method: "POST",
+        credentials: "include",
+      });
     } catch {
       // Ignorar fallo de red y proceder
     }
+    queryClient.clear();
     lockResultsPanel();
     setActiveTab("MARKET_LIVE");
-    router.push("/login");
+    router.replace("/login");
+    router.refresh();
   };
 
   const handleManualSync = async () => {
@@ -197,6 +203,9 @@ export function TopNavigationBar() {
 
       {/* Derecha: Toggle Tema + Controles según estado de desbloqueo */}
       <div className="flex flex-wrap items-center gap-2">
+        {/* Botón Instalar App PWA (solo aparece si aún no está instalada) */}
+        <InstallAppButton variant="navbar" />
+
         {/* Botón Toggle Tema Claro / Oscuro (Zustand) */}
         <button
           type="button"

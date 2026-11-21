@@ -5,6 +5,13 @@ import { env } from "@/env";
 const ALGORITHM = "aes-256-gcm" as const;
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 export const SESSION_COOKIE_NAME = "bot_p2p_session" as const;
+// Sesión persistente de 365 días (dentro del límite de 400 días de Chrome)
+// con renovación deslizante automática: solo se cierra cuando el dueño presiona "Salir".
+export const SESSION_DURATION_DAYS = 365 as const;
+export const SESSION_DURATION_SECONDS = SESSION_DURATION_DAYS * 24 * 60 * 60;
+export const SESSION_DURATION_MS = SESSION_DURATION_SECONDS * 1000;
+export const SESSION_SLIDING_RENEW_THRESHOLD_MS =
+  (SESSION_DURATION_DAYS - 1) * 24 * 60 * 60 * 1000;
 
 function getMasterKey(): Buffer {
   return Buffer.from(env.MASTER_ENCRYPTION_KEY, "hex");
@@ -139,7 +146,7 @@ export function createSignedSessionToken(user: {
     userId: user.id,
     email: user.email,
     name: user.name,
-    exp: Date.now() + 8 * 60 * 60 * 1000, // 8 horas de sesión
+    exp: Date.now() + SESSION_DURATION_MS,
   };
   const dataB64 = Buffer.from(JSON.stringify(payload), "utf8").toString(
     "base64url"
@@ -149,6 +156,14 @@ export function createSignedSessionToken(user: {
     .update(dataB64)
     .digest("base64url");
   return `${dataB64}.${signature}`;
+}
+
+export function shouldRenewSessionToken(
+  payload: SignedSessionPayload,
+  nowMs: number = Date.now()
+): boolean {
+  const remainingMs = payload.exp - nowMs;
+  return remainingMs > 0 && remainingMs < SESSION_SLIDING_RENEW_THRESHOLD_MS;
 }
 
 export function verifySignedSessionToken(

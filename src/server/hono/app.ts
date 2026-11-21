@@ -1,5 +1,5 @@
 import "server-only";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { csrf } from "hono/csrf";
 import { secureHeaders } from "hono/secure-headers";
@@ -27,9 +27,13 @@ import {
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
 import {
   SESSION_COOKIE_NAME,
+  SESSION_DURATION_DAYS,
+  SESSION_DURATION_MS,
+  SESSION_DURATION_SECONDS,
   createSignedSessionToken,
   generateTotpSecret,
   hashPassword,
+  shouldRenewSessionToken,
   verifyPasswordHash,
   verifySignedSessionToken,
   verifyTotpCode,
@@ -120,6 +124,31 @@ baseApp.use(
   })
 );
 
+function isSecureRequestCookie(reqUrl: string): boolean {
+  if (env.NODE_ENV !== "production") return false;
+  if (
+    reqUrl.startsWith("http://localhost") ||
+    reqUrl.startsWith("http://127.0.0.1")
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function setPersistentSessionCookie(
+  c: Context<HonoEnv>,
+  sessionToken: string
+): void {
+  setCookie(c, SESSION_COOKIE_NAME, sessionToken, {
+    httpOnly: true,
+    path: "/",
+    sameSite: "Lax",
+    secure: isSecureRequestCookie(c.req.url),
+    maxAge: SESSION_DURATION_SECONDS,
+    expires: new Date(Date.now() + SESSION_DURATION_MS),
+  });
+}
+
 // 2. RequestId + No-Store Headers + Rate Limiting + Resolución Estricta de Sesión
 baseApp.use("*", async (c, next) => {
   const requestId = crypto.randomUUID();
@@ -169,6 +198,24 @@ baseApp.use("*", async (c, next) => {
       name: verifiedPayload.name,
       role: effectiveRole,
     };
+
+    // Renovación deslizante automática: si la cookie tiene >24h desde su emisión
+    // (o es un token previo de 8h), se extiende a 365 días para no cerrar sesión
+    // hasta que el dueño pulse explícitamente "Salir".
+    const reqPath = c.req.path;
+    const isAuthLifecycleEndpoint =
+      reqPath === "/api/p2p/logout" ||
+      reqPath === "/api/p2p/login-vault" ||
+      reqPath === "/api/p2p/register";
+
+    if (!isAuthLifecycleEndpoint && shouldRenewSessionToken(verifiedPayload)) {
+      const refreshedToken = createSignedSessionToken({
+        id: verifiedPayload.userId,
+        email: verifiedPayload.email,
+        name: verifiedPayload.name,
+      });
+      setPersistentSessionCookie(c, refreshedToken);
+    }
   }
 
   c.set("user", resolvedUser);
@@ -239,13 +286,7 @@ export const routes = baseApp
         name: createdUser.fullName,
       });
 
-      setCookie(c, SESSION_COOKIE_NAME, sessionToken, {
-        httpOnly: true,
-        path: "/",
-        sameSite: "Lax",
-        secure: env.NODE_ENV === "production",
-        maxAge: 8 * 60 * 60,
-      });
+      setPersistentSessionCookie(c, sessionToken);
 
       const otpauthUrl = `otpauth://totp/BotP2P:${encodeURIComponent(
         createdUser.email
@@ -351,20 +392,14 @@ export const routes = baseApp
         name: userRecord.fullName,
       });
 
-      setCookie(c, SESSION_COOKIE_NAME, sessionToken, {
-        httpOnly: true,
-        path: "/",
-        sameSite: "Lax",
-        secure: env.NODE_ENV === "production",
-        maxAge: 8 * 60 * 60,
-      });
+      setPersistentSessionCookie(c, sessionToken);
 
       const responseData: LoginVaultResponseDto = {
         sessionId: `ses_${crypto.randomUUID().slice(0, 12)}`,
         role: "OPERATOR",
         email: userRecord.email,
         authorizedIp: "Conectado",
-        maxSessionHours: 8,
+        maxSessionHours: SESSION_DURATION_DAYS * 24,
         redirectTo: "/",
       };
 
@@ -378,7 +413,12 @@ export const routes = baseApp
     }
   )
   .post("/p2p/logout", async (c) => {
-    deleteCookie(c, SESSION_COOKIE_NAME, { path: "/" });
+    deleteCookie(c, SESSION_COOKIE_NAME, {
+      path: "/",
+      httpOnly: true,
+      sameSite: "Lax",
+      secure: isSecureRequestCookie(c.req.url),
+    });
     return c.json(
       {
         message: "Sesión cerrada exitosamente.",

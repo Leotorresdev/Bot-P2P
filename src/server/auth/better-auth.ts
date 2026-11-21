@@ -25,8 +25,8 @@ export const auth = betterAuth({
     },
   },
   session: {
-    expiresIn: 60 * 60 * 8, // 8 horas máximo (Política de Bóveda Contable)
-    updateAge: 60 * 15,
+    expiresIn: 60 * 60 * 24 * 365, // Sesión persistente (365 días con renovación deslizante hasta cierre manual)
+    updateAge: 60 * 60 * 24,
   },
   plugins: [
     twoFactor({

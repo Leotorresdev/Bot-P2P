@@ -53,6 +53,7 @@ export function RegisterScreen() {
     try {
       const res = await fetch("/api/p2p/register", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(values),
       });

@@ -2,6 +2,18 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const SESSION_COOKIE_NAME = "bot_p2p_session";
 
+function decodeBase64UrlToUtf8(input: string): string {
+  const base64 = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padLength = (4 - (base64.length % 4)) % 4;
+  const padded = base64 + "=".repeat(padLength);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
 function isSessionStructureValid(token: string | undefined): boolean {
   if (!token || !token.includes(".")) return false;
   const parts = token.split(".");
@@ -10,7 +22,7 @@ function isSessionStructureValid(token: string | undefined): boolean {
   if (!dataB64 || !sig || sig.length < 16) return false;
 
   try {
-    const jsonStr = atob(dataB64.replace(/-/g, "+").replace(/_/g, "/"));
+    const jsonStr = decodeBase64UrlToUtf8(dataB64);
     const payload = JSON.parse(jsonStr) as { userId?: string; exp?: number };
     if (!payload.userId || !payload.exp) return false;
     if (Date.now() > payload.exp) return false;

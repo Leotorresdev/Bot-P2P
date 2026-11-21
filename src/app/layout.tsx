@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
 import { QueryProvider } from "@/components/providers/query-provider";
 import "./globals.css";
@@ -16,17 +16,49 @@ const mono = JetBrains_Mono({
   display: "swap",
 });
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#0B0E11" },
+    { media: "(prefers-color-scheme: light)", color: "#F4F7F9" },
+  ],
+};
+
 export const metadata: Metadata = {
+  applicationName: "Bot P2P",
+  manifest: "/manifest.webmanifest",
   title: "Bot P2P — Suite Contable & Fiscal SENIAT 16% (Binance C2C)",
   description:
-    "Sistema automatizado de registro de ganancias P&L por lote (FIFO/WAC), conciliación multibancos Venezuela, cierres diarios 11:59 PM VET y provisión del 16% de impuesto SENIAT.",
+    "Sistema automatizado de registro de ganancias P&L, conciliación multibancos Venezuela, control de jornadas y provisión de impuesto SENIAT.",
+  appleWebApp: {
+    capable: true,
+    title: "Bot P2P",
+    statusBarStyle: "black-translucent",
+  },
+  formatDetection: {
+    telephone: false,
+  },
+  other: {
+    "mobile-web-app-capable": "yes",
+  },
   icons: {
     icon: [
+      { url: "/icons/icon-192x192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512x512.png", sizes: "512x512", type: "image/png" },
       { url: "/icon.svg", type: "image/svg+xml" },
       { url: "/favicon.ico", sizes: "any" },
     ],
-    shortcut: "/icon.svg",
-    apple: "/icon.svg",
+    shortcut: "/icons/icon-192x192.png",
+    apple: [
+      {
+        url: "/icons/apple-touch-icon.png",
+        sizes: "180x180",
+        type: "image/png",
+      },
+    ],
   },
 };
 

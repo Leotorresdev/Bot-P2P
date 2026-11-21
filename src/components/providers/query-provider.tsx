@@ -3,6 +3,7 @@
 import * as React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useThemeStore } from "@/features/p2p-ledger/store/use-theme-store";
+import { PwaProvider } from "@/components/providers/pwa-provider";
 
 function ThemeSynchronizer() {
   const theme = useThemeStore((state) => state.theme);
@@ -40,6 +41,7 @@ export function QueryProvider({
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeSynchronizer />
+      <PwaProvider />
       {children}
     </QueryClientProvider>
   );
