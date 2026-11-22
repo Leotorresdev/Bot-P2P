@@ -85,6 +85,106 @@ export interface ClosingReportData {
   readonly orders: readonly P2POrderRowDto[];
   readonly dailyClosures?: readonly DailyTotalClosureDto[];
   readonly totalShiftsInPeriod?: number;
+  readonly excludedNonUsdtCount?: number;
+  readonly excludedNonVesCount?: number;
+  readonly syncComplete?: boolean;
+  readonly incompleteDays?: readonly string[];
+  readonly syncWarning?: string;
+}
+
+export interface OrderEligibilityResult {
+  readonly included: boolean;
+  readonly normalizedAsset: string;
+  readonly normalizedFiat: string;
+  readonly verifiedStatusCategory: OrderStatusCategory;
+  readonly reasonLabel: string;
+}
+
+/**
+ * Fuente única de verdad para decidir si una orden entra en el cálculo de
+ * volúmenes y ganancias P2P Venezuela:
+ * - Estado estrictamente COMPLETED (doble validación statusCategory + orderStatus)
+ * - Fiat estrictamente VES
+ * - Criptoactivo estrictamente USDT (descarta BTC, ETH, BNB, USDC, FDUSD, etc.)
+ */
+export function evaluateOrderCalculationEligibility(
+  order: Pick<
+    P2POrderRowDto,
+    "orderStatus" | "statusCategory" | "asset" | "fiat"
+  >
+): OrderEligibilityResult {
+  const normalizedAsset = (order.asset || "USDT").trim().toUpperCase();
+  const normalizedFiat = (order.fiat || "VES").trim().toUpperCase();
+  const verifiedStatusCategory = mapBinanceOrderStatus(
+    order.orderStatus || order.statusCategory
+  ).statusCategory;
+
+  if (
+    order.statusCategory === "CANCELLED" ||
+    verifiedStatusCategory === "CANCELLED"
+  ) {
+    return {
+      included: false,
+      normalizedAsset,
+      normalizedFiat,
+      verifiedStatusCategory: "CANCELLED",
+      reasonLabel: "NO (Cancelada)",
+    };
+  }
+
+  if (
+    order.statusCategory === "IN_APPEAL" ||
+    verifiedStatusCategory === "IN_APPEAL"
+  ) {
+    return {
+      included: false,
+      normalizedAsset,
+      normalizedFiat,
+      verifiedStatusCategory: "IN_APPEAL",
+      reasonLabel: "NO (Apelada)",
+    };
+  }
+
+  if (
+    order.statusCategory !== "COMPLETED" ||
+    verifiedStatusCategory !== "COMPLETED"
+  ) {
+    return {
+      included: false,
+      normalizedAsset,
+      normalizedFiat,
+      verifiedStatusCategory: "IN_PROGRESS",
+      reasonLabel: "NO (En curso)",
+    };
+  }
+
+  if (normalizedFiat !== "VES") {
+    return {
+      included: false,
+      normalizedAsset,
+      normalizedFiat,
+      verifiedStatusCategory: "COMPLETED",
+      reasonLabel: `NO (Fiat ${normalizedFiat} ≠ VES)`,
+    };
+  }
+
+  if (normalizedAsset !== "USDT") {
+    return {
+      included: false,
+      normalizedAsset,
+      normalizedFiat,
+      verifiedStatusCategory: "COMPLETED",
+      reasonLabel: `NO (Moneda ${normalizedAsset} ≠ USDT)`,
+    };
+  }
+
+  return {
+    included: true,
+    normalizedAsset,
+    normalizedFiat,
+    verifiedStatusCategory: "COMPLETED",
+    reasonLabel: "SÍ",
+  };
 }
 
 /**
@@ -515,30 +615,27 @@ export function calculateVueltaSummary(params: {
   let inProgressCount = 0;
 
   for (const order of orders) {
-    const verifiedStatus = mapBinanceOrderStatus(
-      order.orderStatus || order.statusCategory
-    ).statusCategory;
+    const eligibility = evaluateOrderCalculationEligibility(order);
 
-    if (order.statusCategory === "CANCELLED" || verifiedStatus === "CANCELLED") {
+    if (eligibility.verifiedStatusCategory === "CANCELLED") {
       cancelledCount += 1;
       continue;
     }
-    if (order.statusCategory === "IN_APPEAL" || verifiedStatus === "IN_APPEAL") {
+    if (eligibility.verifiedStatusCategory === "IN_APPEAL") {
       appealCount += 1;
       continue;
     }
-    if (order.statusCategory !== "COMPLETED" || verifiedStatus !== "COMPLETED") {
+    if (eligibility.verifiedStatusCategory !== "COMPLETED") {
       inProgressCount += 1;
       continue;
     }
 
-    // Excluir órdenes COMPLETED en otras monedas fiat (ej. Zinli USD) para no distorsionar promedios en Bs.
-    const normalizedFiat = (order.fiat || "VES").trim().toUpperCase();
-    if (normalizedFiat !== "VES") {
+    // Descartar órdenes COMPLETED en otras monedas fiat (ej. USD/Zinli) o en otros criptoactivos distintos a USDT (ej. BTC, USDC, BNB)
+    if (!eligibility.included) {
       continue;
     }
 
-    // Únicamente órdenes COMPLETED en VES suman al volumen y ganancias
+    // Únicamente órdenes COMPLETED en USDT/VES suman al volumen y ganancias
     const amt = parseSafeDecimal(order.amountUsdt);
     const price = parseSafeDecimal(order.unitPriceVes);
     const parsedTotal = parseSafeDecimal(order.totalPriceVes);
@@ -725,6 +822,7 @@ export function buildAggregatedSummaryFromClosures(params: {
   let totalBoughtUsdt = new Decimal(0);
   let totalBoughtVes = new Decimal(0);
   let totalVolumeUsdt = new Decimal(0);
+  let vueltaVolumeUsdt = new Decimal(0);
 
   let grossProfitVes = new Decimal(0);
   let grossProfitUsdt = new Decimal(0);
@@ -733,12 +831,21 @@ export function buildAggregatedSummaryFromClosures(params: {
   let netProfitUsdt = new Decimal(0);
   let netProfitBs = new Decimal(0);
 
+  let completedSellCount = 0;
+  let completedBuyCount = 0;
+  let cancelledCount = 0;
+  let appealCount = 0;
+  let inProgressCount = 0;
+
   for (const s of summaries) {
     totalSoldUsdt = totalSoldUsdt.plus(parseSafeDecimal(s.totalSoldUsdt));
     totalSoldVes = totalSoldVes.plus(parseSafeDecimal(s.totalSoldVes));
     totalBoughtUsdt = totalBoughtUsdt.plus(parseSafeDecimal(s.totalBoughtUsdt));
     totalBoughtVes = totalBoughtVes.plus(parseSafeDecimal(s.totalBoughtVes));
     totalVolumeUsdt = totalVolumeUsdt.plus(parseSafeDecimal(s.totalVolumeUsdt));
+    vueltaVolumeUsdt = vueltaVolumeUsdt.plus(
+      parseSafeDecimal(s.vueltaVolumeUsdt)
+    );
 
     grossProfitVes = grossProfitVes.plus(parseSafeDecimal(s.grossProfitVes));
     grossProfitUsdt = grossProfitUsdt.plus(parseSafeDecimal(s.grossProfitUsdt));
@@ -750,9 +857,15 @@ export function buildAggregatedSummaryFromClosures(params: {
     );
     netProfitUsdt = netProfitUsdt.plus(parseSafeDecimal(s.netProfitUsdt));
     netProfitBs = netProfitBs.plus(parseSafeDecimal(s.netProfitVes));
+
+    completedSellCount += s.completedSellCount;
+    completedBuyCount += s.completedBuyCount;
+    cancelledCount += s.cancelledCount;
+    appealCount += s.appealCount;
+    inProgressCount += s.inProgressCount;
   }
 
-  // Precio Promedio Ponderado Total (Total Bs ÷ Total USDT) y Brecha
+  // Precio Promedio Ponderado Total (Total Bs ÷ Total USDT)
   const activeAvgSell = totalSoldUsdt.gt(0)
     ? totalSoldVes.div(totalSoldUsdt)
     : new Decimal(0);
@@ -760,16 +873,15 @@ export function buildAggregatedSummaryFromClosures(params: {
     ? totalBoughtVes.div(totalBoughtUsdt)
     : new Decimal(0);
 
-  const hasBothSides = totalSoldUsdt.gt(0) && totalBoughtUsdt.gt(0);
-  const brechaPoints = hasBothSides
-    ? activeAvgSell.minus(activeAvgBuy)
+  // Brecha efectiva ponderada por el volumen real de vueltas diarias (coherente con Σ Ganancia Bruta Día)
+  const brechaPoints = vueltaVolumeUsdt.gt(0)
+    ? grossProfitVes.div(vueltaVolumeUsdt)
     : new Decimal(0);
   const spreadPct =
-    hasBothSides && activeAvgBuy.gt(0)
+    vueltaVolumeUsdt.gt(0) && activeAvgBuy.gt(0)
       ? brechaPoints.div(activeAvgBuy).mul(100)
       : new Decimal(0);
 
-  const vueltaVolumeUsdt = Decimal.min(totalSoldUsdt, totalBoughtUsdt);
   const diffUsdt = totalSoldUsdt.minus(totalBoughtUsdt);
 
   let pendingDirection: "NONE" | "BUY_BACK" | "SELL_OUT" = "NONE";
@@ -780,25 +892,6 @@ export function buildAggregatedSummaryFromClosures(params: {
   } else if (diffUsdt.lt(0)) {
     pendingDirection = "SELL_OUT";
     pendingUsdtDec = diffUsdt.abs();
-  }
-
-  let completedSellCount = 0;
-  let completedBuyCount = 0;
-  let cancelledCount = 0;
-  let appealCount = 0;
-  let inProgressCount = 0;
-
-  for (const order of orders) {
-    if (order.statusCategory === "CANCELLED") {
-      cancelledCount += 1;
-    } else if (order.statusCategory === "IN_APPEAL") {
-      appealCount += 1;
-    } else if (order.statusCategory === "COMPLETED") {
-      if (order.tradeType === "SELL") completedSellCount += 1;
-      else completedBuyCount += 1;
-    } else {
-      inProgressCount += 1;
-    }
   }
 
   const seniatRateDec = new Decimal(seniatTaxPercent).div(100);
@@ -862,6 +955,157 @@ export function buildAggregatedSummaryFromClosures(params: {
     lastSyncSecondsAgo: 2,
     workingCapitalUsdt: formatDecimalMoney(totalVolumeUsdt, 2),
     workingCapitalVes: formatDecimalMoney(totalSoldVes.plus(totalBoughtVes), 2),
+  };
+}
+
+export function countExcludedCompletedOrders(
+  orders: readonly P2POrderRowDto[]
+): {
+  readonly excludedNonUsdtCount: number;
+  readonly excludedNonVesCount: number;
+} {
+  let excludedNonUsdtCount = 0;
+  let excludedNonVesCount = 0;
+
+  for (const order of orders) {
+    const eligibility = evaluateOrderCalculationEligibility(order);
+    if (eligibility.verifiedStatusCategory !== "COMPLETED") continue;
+    if (eligibility.normalizedFiat !== "VES") {
+      excludedNonVesCount += 1;
+    } else if (eligibility.normalizedAsset !== "USDT") {
+      excludedNonUsdtCount += 1;
+    }
+  }
+
+  return { excludedNonUsdtCount, excludedNonVesCount };
+}
+
+/**
+ * Enumera todas las fechas calendario VET (`YYYY-MM-DD`) dentro de `[startMs, endMs]`
+ * acotadas al presente y a la ventana máxima de 180 días que conserva Binance C2C SAPI.
+ */
+export function enumerateVetDateIsosInRange(
+  startMs: number,
+  endMs: number,
+  nowMs: number = Date.now()
+): string[] {
+  const oldestAllowedMs = nowMs - MAX_BINANCE_LOOKBACK_MS;
+  const clampedStart = Math.max(startMs, oldestAllowedMs);
+  const clampedEnd = Math.min(endMs, nowMs);
+  if (clampedEnd < clampedStart) return [];
+
+  const firstIso = formatVetOrderTimestamp(clampedStart).dateIso;
+  const lastIso = formatVetOrderTimestamp(clampedEnd).dateIso;
+  const dates: string[] = [];
+
+  let cursorMs = getVetDayRangeMs(firstIso).startMs;
+  const finalDayStartMs = getVetDayRangeMs(lastIso).startMs;
+  let guard = 0;
+
+  while (cursorMs <= finalDayStartMs && guard < 200) {
+    dates.push(formatVetOrderTimestamp(cursorMs).dateIso);
+    cursorMs += 86_400_000;
+    guard++;
+  }
+
+  return dates;
+}
+
+/**
+ * Construye el desglose día por día (VET) de un mes calendario y agrega el resumen mensual
+ * como la **suma exacta** de las ganancias, comisiones y volúmenes de cada día (`Decimal.js`),
+ * evitando distorsiones o ganancias negativas falsas por variación cambiaria durante el mes.
+ */
+export function buildDailyBreakdownAndMonthlySummary(params: {
+  readonly userId: string;
+  readonly targetMonth: string;
+  readonly monthOrders: readonly P2POrderRowDto[];
+  readonly periodLabel: string;
+  readonly badge: MerchantBadgeType;
+  readonly seniatTaxPercent: number;
+}): {
+  readonly dailyBreakdown: readonly DailyTotalClosureDto[];
+  readonly summary: PnlSummaryDto;
+  readonly excludedNonUsdtCount: number;
+  readonly excludedNonVesCount: number;
+} {
+  const {
+    userId,
+    targetMonth,
+    monthOrders,
+    periodLabel,
+    badge,
+    seniatTaxPercent,
+  } = params;
+
+  const ordersByDay = new Map<string, P2POrderRowDto[]>();
+  for (const order of monthOrders) {
+    const dayKey = order.dateIsoVet;
+    const list = ordersByDay.get(dayKey) ?? [];
+    list.push(order);
+    ordersByDay.set(dayKey, list);
+  }
+
+  const sortedDayKeys = Array.from(ordersByDay.keys()).sort((a, b) =>
+    a.localeCompare(b)
+  );
+  const badgeMeta = MERCHANT_BADGE_META[badge];
+
+  const dailyBreakdown: DailyTotalClosureDto[] = sortedDayKeys.map((dayIso) => {
+    const dayOrders = ordersByDay.get(dayIso) ?? [];
+    const dayLabel = formatDateIsoVe(dayIso);
+    const daySummary = calculateVueltaSummary({
+      orders: dayOrders,
+      period: "DAY",
+      periodLabel: `Día ${dayLabel}`,
+      method: "FIFO",
+      badge,
+      seniatTaxPercent,
+    });
+    return {
+      id: `cal_${userId}_${dayIso}`,
+      userId,
+      dateIsoVet: dayIso,
+      monthIsoVet: targetMonth,
+      dateLabelVet: dayLabel,
+      executedAtVet: "Registro Diario Calendario VET",
+      shiftsCount: 1,
+      merchantBadge: badge,
+      merchantBadgeLabel: badgeMeta.label,
+      summary: daySummary,
+      shiftsMeta: [],
+      orders: dayOrders,
+      updatedAtIso: new Date().toISOString(),
+    };
+  });
+
+  const summary =
+    dailyBreakdown.length > 0
+      ? buildAggregatedSummaryFromClosures({
+          summaries: dailyBreakdown.map((d) => d.summary),
+          orders: monthOrders,
+          period: "MONTH",
+          periodLabel,
+          badge,
+          seniatTaxPercent,
+        })
+      : calculateVueltaSummary({
+          orders: [],
+          period: "MONTH",
+          periodLabel,
+          method: "FIFO",
+          badge,
+          seniatTaxPercent,
+        });
+
+  const { excludedNonUsdtCount, excludedNonVesCount } =
+    countExcludedCompletedOrders(monthOrders);
+
+  return {
+    dailyBreakdown,
+    summary,
+    excludedNonUsdtCount,
+    excludedNonVesCount,
   };
 }
 
@@ -1358,6 +1602,259 @@ export class P2PAccountingService {
   }
 
   /**
+   * Sincronización determinista día por día (VET) diseñada para cuentas de alto volumen
+   * (400–500+ órdenes/día / ~15,000 órdenes/mes):
+   * - Evita pedir ventanas gigantes de 28 días que se cortan por el límite de páginas o timeout.
+   * - Consulta `p2p_sync_day_coverage` para saltar días pasados ya descargados íntegramente.
+   * - Re-sincroniza cualquier día faltante, incompleto, con órdenes abiertas (`IN_PROGRESS`/`IN_APPEAL`)
+   *   o del día en curso.
+   * - Reporta explícitamente si algún día no pudo completarse (rate-limit 429 o presupuesto de tiempo)
+   *   para que ningún Excel se entregue con huecos silenciosos.
+   */
+  public static async ensureRangeCompletelySynced(
+    userId: string,
+    startMs: number,
+    endMs: number,
+    options?: {
+      readonly totalBudgetMs?: number;
+      readonly maxPagesPerDay?: number;
+      readonly concurrency?: number;
+      readonly forceRefreshToday?: boolean;
+    }
+  ): Promise<{
+    readonly orders: readonly P2POrderRowDto[];
+    readonly isComplete: boolean;
+    readonly incompleteDays: readonly string[];
+    readonly warningMessage?: string;
+  }> {
+    const totalBudgetMs = options?.totalBudgetMs ?? 45_000;
+    const maxPagesPerDay = options?.maxPagesPerDay ?? 40; // 40 * 50 = 2,000 BUY + 2,000 SELL por día
+    const concurrency = Math.max(1, Math.min(options?.concurrency ?? 3, 4));
+    const forceRefreshToday = options?.forceRefreshToday ?? true;
+
+    const credential =
+      await SupabaseVaultRepository.getBinanceCredential(userId);
+    if (!credential) {
+      const stored = await SupabaseVaultRepository.getUserOrdersInRange(
+        userId,
+        { startMs, endMs }
+      );
+      return {
+        orders: stored.map(toMirrorOrderDto),
+        isComplete: true,
+        incompleteDays: [],
+      };
+    }
+
+    const nowMs = Date.now();
+    const dateIsos = enumerateVetDateIsosInRange(startMs, endMs, nowMs);
+    if (dateIsos.length === 0) {
+      const stored = await SupabaseVaultRepository.getUserOrdersInRange(
+        userId,
+        { startMs, endMs }
+      );
+      return {
+        orders: stored.map(toMirrorOrderDto),
+        isComplete: true,
+        incompleteDays: [],
+      };
+    }
+
+    const firstIso = dateIsos[0]!;
+    const lastIso = dateIsos[dateIsos.length - 1]!;
+    const todayIso = getCurrentVetDateIso(nowMs);
+    const coverageMap = await SupabaseVaultRepository.getSyncedDayCoverage(
+      userId,
+      firstIso,
+      lastIso
+    );
+
+    const daysToSync: string[] = [];
+    for (const dayIso of dateIsos) {
+      const dayRange = getVetDayRangeMs(dayIso);
+      const isClosedPastDay = dayRange.endMs < nowMs - 60 * 60_000;
+      const cov = coverageMap.get(dayIso);
+
+      if (isClosedPastDay && cov && cov.isComplete && cov.openOrdersCount === 0) {
+        continue;
+      }
+
+      if (dayIso === todayIso && !forceRefreshToday) {
+        const lastSync = this.lastSyncTimestampByUser.get(userId) ?? 0;
+        if (nowMs - lastSync < this.SYNC_COOLDOWN_MS) {
+          continue;
+        }
+      }
+
+      daysToSync.push(dayIso);
+    }
+
+    const incompleteDays: string[] = [];
+    const freshRecordsMap = new Map<string, StoredP2POrderRecord>();
+
+    if (daysToSync.length > 0) {
+      const startedAtMs = Date.now();
+      let rateLimitedHit = false;
+
+      const { apiKey, apiSecret } = decryptBinanceCredentials(
+        credential.apiKeyEncrypted,
+        credential.iv,
+        credential.authTag
+      );
+
+      for (let i = 0; i < daysToSync.length; i += concurrency) {
+        const batch = daysToSync.slice(i, i + concurrency);
+        const elapsed = Date.now() - startedAtMs;
+        if (rateLimitedHit || elapsed >= totalBudgetMs) {
+          incompleteDays.push(...daysToSync.slice(i));
+          break;
+        }
+
+        const remainingBudget = Math.max(4_000, totalBudgetMs - elapsed);
+        const perDayBudget = Math.min(18_000, remainingBudget);
+
+        const batchResults = await Promise.all(
+          batch.map(async (dayIso) => {
+            const dayRange = getVetDayRangeMs(dayIso);
+            const effectiveEndMs = Math.min(dayRange.endMs, Date.now() + 60_000);
+            try {
+              const [buyRes, sellRes] = await Promise.all([
+                fetchBinanceOrdersInRange(
+                  apiKey,
+                  apiSecret,
+                  "BUY",
+                  dayRange.startMs,
+                  effectiveEndMs,
+                  maxPagesPerDay,
+                  perDayBudget
+                ),
+                fetchBinanceOrdersInRange(
+                  apiKey,
+                  apiSecret,
+                  "SELL",
+                  dayRange.startMs,
+                  effectiveEndMs,
+                  maxPagesPerDay,
+                  perDayBudget
+                ),
+              ]);
+
+              const combined = [...buyRes.data, ...sellRes.data];
+              const mapped =
+                combined.length > 0
+                  ? mapRawItemsToStoredRecords(userId, combined)
+                  : [];
+
+              if (mapped.length > 0) {
+                await SupabaseVaultRepository.saveUserOrders(userId, mapped);
+              }
+
+              const openOrdersCount = mapped.filter(
+                (r) =>
+                  r.statusCategory === "IN_PROGRESS" ||
+                  r.statusCategory === "IN_APPEAL"
+              ).length;
+
+              const hitRateLimit =
+                String(buyRes.error ?? "").includes("429") ||
+                String(buyRes.error ?? "").includes("418") ||
+                String(sellRes.error ?? "").includes("429") ||
+                String(sellRes.error ?? "").includes("418");
+
+              const dayFullySynced =
+                buyRes.success &&
+                sellRes.success &&
+                !buyRes.truncatedByBudget &&
+                !sellRes.truncatedByBudget;
+
+              const isClosedPastDay =
+                dayRange.endMs < Date.now() - 60 * 60_000;
+
+              if (dayFullySynced && isClosedPastDay) {
+                await SupabaseVaultRepository.upsertDayCoverage({
+                  userId,
+                  dateIsoVet: dayIso,
+                  isComplete: true,
+                  buyCount: buyRes.data.length,
+                  sellCount: sellRes.data.length,
+                  openOrdersCount,
+                  syncedAt: new Date().toISOString(),
+                });
+              }
+
+              return {
+                dayIso,
+                mapped,
+                dayFullySynced,
+                hitRateLimit,
+              };
+            } catch {
+              return {
+                dayIso,
+                mapped: [] as StoredP2POrderRecord[],
+                dayFullySynced: false,
+                hitRateLimit: false,
+              };
+            }
+          })
+        );
+
+        for (const res of batchResults) {
+          for (const rec of res.mapped) {
+            freshRecordsMap.set(rec.orderNumber, rec);
+          }
+          if (!res.dayFullySynced) {
+            incompleteDays.push(res.dayIso);
+          }
+          if (res.hitRateLimit) {
+            rateLimitedHit = true;
+          }
+        }
+      }
+
+      if (incompleteDays.length === 0) {
+        this.lastSyncTimestampByUser.set(userId, Date.now());
+      }
+    }
+
+    const storedAfter = await SupabaseVaultRepository.getUserOrdersInRange(
+      userId,
+      { startMs, endMs }
+    );
+
+    const mergedMap = new Map<string, StoredP2POrderRecord>();
+    for (const oldRec of storedAfter) {
+      mergedMap.set(oldRec.orderNumber, oldRec);
+    }
+    for (const fresh of freshRecordsMap.values()) {
+      if (fresh.createTimeMs < startMs || fresh.createTimeMs > endMs) continue;
+      mergedMap.set(fresh.orderNumber, fresh);
+    }
+
+    const mergedSorted = Array.from(mergedMap.values()).sort((a, b) => {
+      if (b.createTimeMs !== a.createTimeMs) {
+        return b.createTimeMs - a.createTimeMs;
+      }
+      return b.orderNumber.localeCompare(a.orderNumber);
+    });
+
+    const uniqueIncomplete = Array.from(new Set(incompleteDays)).sort((a, b) =>
+      a.localeCompare(b)
+    );
+    const isComplete = uniqueIncomplete.length === 0;
+    const warningMessage = !isComplete
+      ? `Sincronización parcial por volumen/límite de Binance: faltan ${uniqueIncomplete.length} día(s) (${uniqueIncomplete.slice(0, 5).map(formatDateIsoVe).join(", ")}${uniqueIncomplete.length > 5 ? "..." : ""}). Vuelve a pulsar descargar para completar los días restantes (los ya sincronizados quedaron guardados).`
+      : undefined;
+
+    return {
+      orders: mergedSorted.map(toMirrorOrderDto),
+      isComplete,
+      incompleteDays: uniqueIncomplete,
+      warningMessage,
+    };
+  }
+
+  /**
    * Calcula los KPIs en tiempo real usando el motor por "Vuelta" y Brecha de Puntos
    * con la insignia persistente del usuario.
    * Cuando `period === "TODAY"`, opera en modo Control por Jornada:
@@ -1417,6 +1914,56 @@ export class P2PAccountingService {
       date: params.date,
       month: params.month,
     });
+
+    const isMonthQuery =
+      params.period === "MONTH" ||
+      Boolean(params.month && /^\d{4}-\d{2}$/.test(params.month));
+    const isDayQuery =
+      params.period === "DAY" ||
+      Boolean(params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date));
+
+    if ((isMonthQuery || isDayQuery) && bounds.startMs !== null && bounds.endMs !== null) {
+      const synced = await this.ensureRangeCompletelySynced(
+        params.userId,
+        bounds.startMs,
+        bounds.endMs,
+        {
+          totalBudgetMs: 18_000,
+          forceRefreshToday: false,
+        }
+      );
+
+      const periodOrders = synced.orders.filter(
+        (o) =>
+          o.createTimeMs >= bounds.startMs! &&
+          o.createTimeMs <= bounds.endMs!
+      );
+
+      if (isMonthQuery) {
+        const targetMonth =
+          params.month && /^\d{4}-\d{2}$/.test(params.month)
+            ? params.month
+            : getCurrentVetMonthIso();
+        const { summary } = buildDailyBreakdownAndMonthlySummary({
+          userId: params.userId,
+          targetMonth,
+          monthOrders: periodOrders,
+          periodLabel: bounds.periodLabel,
+          badge: taxConfig.merchantBadge,
+          seniatTaxPercent: taxConfig.seniatTaxPercent,
+        });
+        return summary;
+      }
+
+      return calculateVueltaSummary({
+        orders: periodOrders,
+        period: params.period,
+        periodLabel: bounds.periodLabel,
+        method: params.method,
+        badge: taxConfig.merchantBadge,
+        seniatTaxPercent: taxConfig.seniatTaxPercent,
+      });
+    }
 
     const allMirrorOrders = await this.getUserOrdersFromVaultOrBinance(
       params.userId,
@@ -1976,19 +2523,77 @@ export class P2PAccountingService {
         params.shiftId
       );
       if (shiftClosure) {
+        let effectiveOrders = shiftClosure.orders;
+        const hasPendingOrders = effectiveOrders.some(
+          (o) =>
+            o.statusCategory === "IN_PROGRESS" ||
+            o.statusCategory === "IN_APPEAL"
+        );
+
+        // Si al cerrar la jornada había órdenes en curso/apelación, refrescar su estado final en Binance
+        if (hasPendingOrders && shiftClosure.shiftEndTimeMs >= shiftClosure.shiftStartTimeMs) {
+          try {
+            const refreshed = await this.syncBinanceRange(
+              params.userId,
+              shiftClosure.shiftStartTimeMs,
+              shiftClosure.shiftEndTimeMs,
+              {
+                startMs: shiftClosure.shiftStartTimeMs,
+                endMs: shiftClosure.shiftEndTimeMs,
+              }
+            );
+            const filteredRefreshed = refreshed.filter(
+              (o) =>
+                o.createTimeMs >= shiftClosure.shiftStartTimeMs &&
+                o.createTimeMs <= shiftClosure.shiftEndTimeMs
+            );
+            if (filteredRefreshed.length >= effectiveOrders.length) {
+              effectiveOrders = filteredRefreshed;
+            }
+          } catch {
+            // Mantener las órdenes guardadas si Binance no respondió
+          }
+        }
+
+        const periodLabel = `Cierre Jornada #${shiftClosure.shiftNumber} — ${shiftClosure.dateLabelVet} (${shiftClosure.startTimeVetLabel} a ${shiftClosure.endTimeVetLabel} VET)`;
+        // Recalcular con las reglas vigentes (solo COMPLETED + USDT + VES)
+        const recomputedSummary = calculateVueltaSummary({
+          orders: effectiveOrders,
+          period: "TODAY",
+          periodLabel,
+          method: "FIFO",
+          badge: shiftClosure.merchantBadge,
+          seniatTaxPercent: taxConfig.seniatTaxPercent,
+        });
+
+        if (hasPendingOrders) {
+          await SupabaseVaultRepository.saveShiftClosure({
+            ...shiftClosure,
+            orders: effectiveOrders,
+            summary: recomputedSummary,
+          }).catch(() => {});
+        }
+
+        const { excludedNonUsdtCount, excludedNonVesCount } =
+          countExcludedCompletedOrders(effectiveOrders);
+
         return {
           scope: "SHIFT",
           periodKey: `${shiftClosure.dateIsoVet}_Jornada_${shiftClosure.shiftNumber}`,
-          periodLabel: `Cierre Jornada #${shiftClosure.shiftNumber} — ${shiftClosure.dateLabelVet} (${shiftClosure.startTimeVetLabel} a ${shiftClosure.endTimeVetLabel} VET)`,
+          periodLabel,
           generatedAtVet,
-          summary: shiftClosure.summary,
-          orders: shiftClosure.orders,
+          summary: recomputedSummary,
+          orders: effectiveOrders,
           totalShiftsInPeriod: 1,
+          excludedNonUsdtCount,
+          excludedNonVesCount,
+          syncComplete: true,
+          incompleteDays: [],
         };
       }
     }
 
-    // 2. Reporte Contable / Libro Fiscal del Mes Completo (MONTH) — Basado en transacciones calendario
+    // 2. Reporte Contable / Libro Fiscal del Mes Completo (MONTH) — Suma exacta día por día (VET)
     if (params.scope === "MONTH") {
       const targetMonth =
         params.month && /^\d{4}-\d{2}$/.test(params.month)
@@ -1996,85 +2601,58 @@ export class P2PAccountingService {
           : getCurrentVetMonthIso();
       const monthRange = getVetMonthRangeMs(targetMonth);
 
-      const mirrorOrders = await this.getUserOrdersFromVaultOrBinance(
+      const syncedMonth = await this.ensureRangeCompletelySynced(
         params.userId,
-        false,
+        monthRange.startMs,
+        monthRange.endMs,
         {
-          startMs: monthRange.startMs,
-          endMs: monthRange.endMs,
+          totalBudgetMs: 46_000,
+          maxPagesPerDay: 40,
+          concurrency: 3,
+          forceRefreshToday: true,
         }
       );
 
-      const monthOrders = mirrorOrders.filter(
+      const monthOrders = syncedMonth.orders.filter(
         (o) =>
           o.createTimeMs >= monthRange.startMs &&
           o.createTimeMs <= monthRange.endMs
       );
 
-      // Agrupar transacciones por día calendario VET para la tabla "Día por Día" en Excel/PDF
-      const ordersByDay = new Map<string, P2POrderRowDto[]>();
-      for (const order of monthOrders) {
-        const dayKey = order.dateIsoVet;
-        const list = ordersByDay.get(dayKey) ?? [];
-        list.push(order);
-        ordersByDay.set(dayKey, list);
-      }
-
-      const sortedDayKeys = Array.from(ordersByDay.keys()).sort((a, b) =>
-        a.localeCompare(b)
-      );
-      const badgeMeta = MERCHANT_BADGE_META[taxConfig.merchantBadge];
-
-      const dailyBreakdown: DailyTotalClosureDto[] = sortedDayKeys.map(
-        (dayIso) => {
-          const dayOrders = ordersByDay.get(dayIso) ?? [];
-          const dayLabel = formatDateIsoVe(dayIso);
-          const daySummary = calculateVueltaSummary({
-            orders: dayOrders,
-            period: "DAY",
-            periodLabel: `Día ${dayLabel}`,
-            method: "FIFO",
-            badge: taxConfig.merchantBadge,
-            seniatTaxPercent: taxConfig.seniatTaxPercent,
-          });
-          return {
-            id: `cal_${params.userId}_${dayIso}`,
-            userId: params.userId,
-            dateIsoVet: dayIso,
-            monthIsoVet: targetMonth,
-            dateLabelVet: dayLabel,
-            executedAtVet: "Registro Diario Calendario VET",
-            shiftsCount: 1,
-            merchantBadge: taxConfig.merchantBadge,
-            merchantBadgeLabel: badgeMeta.label,
-            summary: daySummary,
-            shiftsMeta: [],
-            orders: dayOrders,
-            updatedAtIso: new Date().toISOString(),
-          };
-        }
-      );
-
-      const periodLabel = `Libro Fiscal Mensual: ${monthRange.labelEs} (${monthOrders.length} órdenes · ${dailyBreakdown.length} ${dailyBreakdown.length === 1 ? "día con actividad" : "días con actividad"})`;
-
-      const summary = calculateVueltaSummary({
-        orders: monthOrders,
-        period: "MONTH",
-        periodLabel,
-        method: "FIFO",
+      const tempPeriodLabel = `Libro Fiscal Mensual: ${monthRange.labelEs}`;
+      const {
+        dailyBreakdown,
+        summary,
+        excludedNonUsdtCount,
+        excludedNonVesCount,
+      } = buildDailyBreakdownAndMonthlySummary({
+        userId: params.userId,
+        targetMonth,
+        monthOrders,
+        periodLabel: tempPeriodLabel,
         badge: taxConfig.merchantBadge,
         seniatTaxPercent: taxConfig.seniatTaxPercent,
       });
+
+      const periodLabel = `Libro Fiscal Mensual: ${monthRange.labelEs} (${monthOrders.length} órdenes · ${dailyBreakdown.length} ${dailyBreakdown.length === 1 ? "día con actividad" : "días con actividad"})`;
 
       return {
         scope: "MONTH",
         periodKey: targetMonth,
         periodLabel,
         generatedAtVet,
-        summary,
+        summary: {
+          ...summary,
+          periodLabel,
+        },
         orders: monthOrders,
         dailyClosures: dailyBreakdown,
         totalShiftsInPeriod: dailyBreakdown.length,
+        excludedNonUsdtCount,
+        excludedNonVesCount,
+        syncComplete: syncedMonth.isComplete,
+        incompleteDays: syncedMonth.incompleteDays,
+        syncWarning: syncedMonth.warningMessage,
       };
     }
 
@@ -2085,15 +2663,18 @@ export class P2PAccountingService {
         : getCurrentVetDateIso();
 
     const range = getVetDayRangeMs(targetDate);
-    const daySynced = await this.getUserOrdersFromVaultOrBinance(
+    const syncedDay = await this.ensureRangeCompletelySynced(
       params.userId,
-      false,
+      range.startMs,
+      range.endMs,
       {
-        startMs: range.startMs,
-        endMs: range.endMs,
+        totalBudgetMs: 30_000,
+        maxPagesPerDay: 40,
+        concurrency: 2,
+        forceRefreshToday: true,
       }
     );
-    const periodOrders = daySynced.filter(
+    const periodOrders = syncedDay.orders.filter(
       (o) => o.createTimeMs >= range.startMs && o.createTimeMs <= range.endMs
     );
     const periodLabel = `Cierre Diario: ${range.labelEs} (00:00:00 - 23:59:59 VET)`;
@@ -2105,6 +2686,8 @@ export class P2PAccountingService {
       badge: taxConfig.merchantBadge,
       seniatTaxPercent: taxConfig.seniatTaxPercent,
     });
+    const { excludedNonUsdtCount, excludedNonVesCount } =
+      countExcludedCompletedOrders(periodOrders);
 
     return {
       scope: "DAY",
@@ -2113,6 +2696,11 @@ export class P2PAccountingService {
       generatedAtVet,
       summary,
       orders: periodOrders,
+      excludedNonUsdtCount,
+      excludedNonVesCount,
+      syncComplete: syncedDay.isComplete,
+      incompleteDays: syncedDay.incompleteDays,
+      syncWarning: syncedDay.warningMessage,
     };
   }
 

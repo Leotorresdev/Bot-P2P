@@ -52,7 +52,7 @@ export function ClosingExportPanel({
     null
   );
   const [statusMessage, setStatusMessage] = React.useState<{
-    readonly type: "success" | "error";
+    readonly type: "success" | "warning" | "error";
     readonly text: string;
   } | null>(null);
 
@@ -130,10 +130,22 @@ export function ClosingExportPanel({
       anchor.remove();
       URL.revokeObjectURL(objectUrl);
 
-      setStatusMessage({
-        type: "success",
-        text: `Reporte descargado: ${fileName}`,
-      });
+      const rawWarningHeader = response.headers.get("x-p2p-sync-warning");
+      const decodedWarning = rawWarningHeader
+        ? decodeURIComponent(rawWarningHeader)
+        : null;
+
+      setStatusMessage(
+        decodedWarning
+          ? {
+              type: "warning",
+              text: `${fileName} descargado con aviso: ${decodedWarning}`,
+            }
+          : {
+              type: "success",
+              text: `Reporte descargado: ${fileName}`,
+            }
+      );
     } catch (error) {
       setStatusMessage({
         type: "error",
@@ -347,13 +359,17 @@ export function ClosingExportPanel({
             "flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold",
             statusMessage.type === "success"
               ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-[#0ECB81]/35 dark:bg-[#0ECB81]/10 dark:text-[#0ECB81]"
-              : "border-rose-200 bg-rose-50 text-rose-800 dark:border-[#F6465D]/35 dark:bg-[#F6465D]/10 dark:text-[#F6465D]"
+              : statusMessage.type === "warning"
+                ? "border-amber-200 bg-amber-50 text-amber-900 dark:border-[#FCD535]/35 dark:bg-[#FCD535]/10 dark:text-[#FCD535]"
+                : "border-rose-200 bg-rose-50 text-rose-800 dark:border-[#F6465D]/35 dark:bg-[#F6465D]/10 dark:text-[#F6465D]"
           )}
         >
           {statusMessage.type === "success" ? (
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-[#0ECB81]" />
+          ) : statusMessage.type === "warning" ? (
+            <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-[#FCD535]" />
           ) : (
-            <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
+            <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 dark:text-[#F6465D]" />
           )}
           <span>{statusMessage.text}</span>
         </div>

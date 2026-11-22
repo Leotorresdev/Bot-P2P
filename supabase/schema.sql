@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS public.api_credentials (
 
 -- 3. Tabla de Órdenes P2P Espejo Binance (Todos los estados y orden cronológico exacto)
 CREATE TABLE IF NOT EXISTS public.p2p_orders (
-  order_number TEXT PRIMARY KEY,
+  order_number TEXT NOT NULL,
   adv_no TEXT NOT NULL DEFAULT '',
   user_id TEXT NOT NULL REFERENCES public.p2p_users(id) ON DELETE CASCADE,
   time_vet_label TEXT NOT NULL,
@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS public.p2p_orders (
   total_price_ves TEXT NOT NULL DEFAULT '0',
   cost_basis_rate_ves TEXT NOT NULL DEFAULT '0',
   create_time_ms BIGINT NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, order_number)
 );
 
 -- Migraciones idempotentes por si la tabla p2p_orders ya existía previamente
@@ -60,6 +61,26 @@ ALTER TABLE public.p2p_orders ADD COLUMN IF NOT EXISTS asset TEXT NOT NULL DEFAU
 ALTER TABLE public.p2p_orders ADD COLUMN IF NOT EXISTS fiat TEXT NOT NULL DEFAULT 'VES';
 ALTER TABLE public.p2p_orders ADD COLUMN IF NOT EXISTS total_price_ves TEXT NOT NULL DEFAULT '0';
 ALTER TABLE public.p2p_orders ADD COLUMN IF NOT EXISTS create_time_ms BIGINT NOT NULL DEFAULT 0;
+
+-- Migración idempotente de PK simple (order_number) -> PK compuesta (user_id, order_number)
+-- Evita que dos usuarios del bot que comercien entre sí sobrescriban la misma orden en Binance P2P.
+DO $$
+DECLARE
+  pk_cols TEXT;
+BEGIN
+  SELECT string_agg(a.attname, ',' ORDER BY k.ord)
+    INTO pk_cols
+    FROM pg_constraint c
+    JOIN unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON true
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+   WHERE c.conrelid = 'public.p2p_orders'::regclass
+     AND c.contype = 'p';
+
+  IF pk_cols = 'order_number' THEN
+    ALTER TABLE public.p2p_orders DROP CONSTRAINT p2p_orders_pkey;
+    ALTER TABLE public.p2p_orders ADD PRIMARY KEY (user_id, order_number);
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_p2p_orders_user_create_time
   ON public.p2p_orders (user_id, create_time_ms DESC, order_number DESC);
@@ -76,6 +97,21 @@ CREATE TABLE IF NOT EXISTS public.p2p_sync_state (
   last_sync_at TIMESTAMPTZ,
   last_error TEXT
 );
+
+-- Cobertura exacta de sincronización por día calendario VET (evita huecos en reportes Excel mensuales/diarios)
+CREATE TABLE IF NOT EXISTS public.p2p_sync_day_coverage (
+  user_id TEXT NOT NULL REFERENCES public.p2p_users(id) ON DELETE CASCADE,
+  date_iso_vet TEXT NOT NULL,
+  is_complete BOOLEAN NOT NULL DEFAULT FALSE,
+  buy_count INTEGER NOT NULL DEFAULT 0,
+  sell_count INTEGER NOT NULL DEFAULT 0,
+  open_orders_count INTEGER NOT NULL DEFAULT 0,
+  synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, date_iso_vet)
+);
+
+CREATE INDEX IF NOT EXISTS idx_p2p_sync_day_coverage_user_date
+  ON public.p2p_sync_day_coverage (user_id, date_iso_vet ASC);
 
 -- 4. Tabla de Actas de Cierre Diario (11:59 PM VET)
 CREATE TABLE IF NOT EXISTS public.daily_closings (
@@ -163,6 +199,9 @@ CREATE TABLE IF NOT EXISTS public.p2p_shift_closures (
 CREATE INDEX IF NOT EXISTS idx_p2p_shift_closures_user_date
   ON public.p2p_shift_closures (user_id, date_iso_vet DESC, shift_number ASC);
 
+CREATE INDEX IF NOT EXISTS idx_p2p_shift_closures_user_id
+  ON public.p2p_shift_closures (user_id, id);
+
 -- 6.D Cierre Total del Día Consolidado (DailyTotalClosure - 11:59:59 PM VET)
 CREATE TABLE IF NOT EXISTS public.p2p_daily_total_closures (
   id TEXT PRIMARY KEY,
@@ -194,6 +233,7 @@ ALTER TABLE public.p2p_active_shifts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.p2p_shift_closures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.p2p_daily_total_closures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.p2p_sync_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.p2p_sync_day_coverage ENABLE ROW LEVEL SECURITY;
 
 -- Políticas permisivas para la API Backend
 DROP POLICY IF EXISTS "Allow Backend MVP Access Users" ON public.p2p_users;
@@ -226,6 +266,9 @@ CREATE POLICY "Allow Backend MVP Access DailyTotalClosures" ON public.p2p_daily_
 DROP POLICY IF EXISTS "Allow Backend MVP Access SyncState" ON public.p2p_sync_state;
 CREATE POLICY "Allow Backend MVP Access SyncState" ON public.p2p_sync_state FOR ALL TO public USING (true) WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow Backend MVP Access SyncDayCoverage" ON public.p2p_sync_day_coverage;
+CREATE POLICY "Allow Backend MVP Access SyncDayCoverage" ON public.p2p_sync_day_coverage FOR ALL TO public USING (true) WITH CHECK (true);
+
 GRANT ALL ON TABLE public.p2p_users TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.api_credentials TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.p2p_orders TO anon, authenticated, service_role;
@@ -236,6 +279,7 @@ GRANT ALL ON TABLE public.p2p_active_shifts TO anon, authenticated, service_role
 GRANT ALL ON TABLE public.p2p_shift_closures TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.p2p_daily_total_closures TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.p2p_sync_state TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.p2p_sync_day_coverage TO anon, authenticated, service_role;
 
 -- 8. Recolección 24/7 Automática en la Nube (Opcional con pg_cron + pg_net en Supabase)
 -- Activa las extensiones pg_cron y pg_net en Dashboard -> Database -> Extensions y ejecuta:

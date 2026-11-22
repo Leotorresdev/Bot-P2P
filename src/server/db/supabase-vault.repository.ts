@@ -72,6 +72,16 @@ export interface StoredUserTaxConfigRecord {
   readonly updatedAt: string;
 }
 
+export interface SyncedDayCoverageRecord {
+  readonly userId: string;
+  readonly dateIsoVet: string;
+  readonly isComplete: boolean;
+  readonly buyCount: number;
+  readonly sellCount: number;
+  readonly openOrdersCount: number;
+  readonly syncedAt: string;
+}
+
 interface LocalVaultDatabase {
   users: StoredUserRecord[];
   credentials: StoredVaultCredentialRecord[];
@@ -91,7 +101,10 @@ const SEED_DB_FILE_PATH = path.join(SEED_DATA_DIR, "vault-db.json");
 
 let memoryVaultDb: LocalVaultDatabase | null = null;
 let p2pOrdersHasV2Columns: boolean | null = null;
+let p2pOrdersHasCompositePk: boolean | null = null;
 let syncStateTableAvailable: boolean | null = null;
+let dayCoverageTableAvailable: boolean | null = null;
+const dayCoverageMemoryCache = new Map<string, SyncedDayCoverageRecord>();
 
 function packOrderV2Metadata(o: StoredP2POrderRecord): string {
   const cleanCostBasis =
@@ -466,9 +479,19 @@ export class SupabaseVaultRepository {
         syncStateTableAvailable !== false
           ? supabase.from("p2p_sync_state").delete().eq("user_id", userId)
           : Promise.resolve(),
+        dayCoverageTableAvailable !== false
+          ? supabase.from("p2p_sync_day_coverage").delete().eq("user_id", userId)
+          : Promise.resolve(),
       ]);
     } catch {
       // Fallback a bóveda local
+    }
+
+    const prefix = `${userId}:`;
+    for (const key of Array.from(dayCoverageMemoryCache.keys())) {
+      if (key.startsWith(prefix)) {
+        dayCoverageMemoryCache.delete(key);
+      }
     }
 
     const db = readLocalDb();
@@ -634,6 +657,7 @@ export class SupabaseVaultRepository {
           }
           queryRes = await builder
             .order("create_time_ms", { ascending: false })
+            .order("order_number", { ascending: false })
             .range(from, to);
         }
 
@@ -659,6 +683,7 @@ export class SupabaseVaultRepository {
           }
           queryRes = await legacyBuilder
             .order("created_at", { ascending: false })
+            .order("order_number", { ascending: false })
             .range(from, to);
         } else if (p2pOrdersHasV2Columns === null) {
           p2pOrdersHasV2Columns = true;
@@ -1002,6 +1027,103 @@ export class SupabaseVaultRepository {
   }
 
   /**
+   * Consulta qué días calendario VET ya fueron sincronizados completamente desde Binance.
+   * Combina `p2p_sync_day_coverage` (si existe en Supabase) con caché en memoria por instancia.
+   */
+  public static async getSyncedDayCoverage(
+    userId: string,
+    startDateIso: string,
+    endDateIso: string
+  ): Promise<ReadonlyMap<string, SyncedDayCoverageRecord>> {
+    const result = new Map<string, SyncedDayCoverageRecord>();
+
+    const prefix = `${userId}:`;
+    for (const [key, rec] of dayCoverageMemoryCache.entries()) {
+      if (
+        key.startsWith(prefix) &&
+        rec.dateIsoVet >= startDateIso &&
+        rec.dateIsoVet <= endDateIso
+      ) {
+        result.set(rec.dateIsoVet, rec);
+      }
+    }
+
+    if (dayCoverageTableAvailable === false) {
+      return result;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("p2p_sync_day_coverage")
+        .select("*")
+        .eq("user_id", userId)
+        .gte("date_iso_vet", startDateIso)
+        .lte("date_iso_vet", endDateIso);
+
+      if (error) {
+        dayCoverageTableAvailable = false;
+        return result;
+      }
+
+      dayCoverageTableAvailable = true;
+      for (const row of data ?? []) {
+        const dateIso = String(row.date_iso_vet ?? "");
+        if (!dateIso) continue;
+        const rec: SyncedDayCoverageRecord = {
+          userId: String(row.user_id ?? userId),
+          dateIsoVet: dateIso,
+          isComplete: Boolean(row.is_complete),
+          buyCount: Number(row.buy_count ?? 0) || 0,
+          sellCount: Number(row.sell_count ?? 0) || 0,
+          openOrdersCount: Number(row.open_orders_count ?? 0) || 0,
+          syncedAt: String(row.synced_at ?? new Date().toISOString()),
+        };
+        result.set(dateIso, rec);
+        dayCoverageMemoryCache.set(`${userId}:${dateIso}`, rec);
+      }
+    } catch {
+      dayCoverageTableAvailable = false;
+    }
+
+    return result;
+  }
+
+  /**
+   * Registra la cobertura de sincronización de un día calendario VET.
+   */
+  public static async upsertDayCoverage(
+    record: SyncedDayCoverageRecord
+  ): Promise<void> {
+    dayCoverageMemoryCache.set(`${record.userId}:${record.dateIsoVet}`, record);
+
+    if (dayCoverageTableAvailable === false) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase.from("p2p_sync_day_coverage").upsert(
+        {
+          user_id: record.userId,
+          date_iso_vet: record.dateIsoVet,
+          is_complete: record.isComplete,
+          buy_count: record.buyCount,
+          sell_count: record.sellCount,
+          open_orders_count: record.openOrdersCount,
+          synced_at: record.syncedAt,
+        },
+        { onConflict: "user_id,date_iso_vet" }
+      );
+      if (error) {
+        dayCoverageTableAvailable = false;
+      } else {
+        dayCoverageTableAvailable = true;
+      }
+    } catch {
+      dayCoverageTableAvailable = false;
+    }
+  }
+
+  /**
    * Hace upsert de órdenes P2P sincronizadas de Binance sin destruir días anteriores
    * ni alterar el orden cronológico original.
    */
@@ -1042,12 +1164,39 @@ export class SupabaseVaultRepository {
       const UPSERT_CHUNK_SIZE = 200;
       let anyRemoteSuccess = false;
 
+      const upsertWithPkFallback = async <T extends Record<string, unknown>>(
+        rows: readonly T[]
+      ): Promise<{ readonly error: { readonly message?: string; readonly code?: string } | null }> => {
+        if (p2pOrdersHasCompositePk !== false) {
+          const res = await supabase
+            .from("p2p_orders")
+            .upsert(rows, { onConflict: "user_id,order_number" });
+          if (!res.error) {
+            p2pOrdersHasCompositePk = true;
+            return { error: null };
+          }
+          const msg = String(res.error.message ?? "");
+          const code = String(res.error.code ?? "");
+          if (
+            code === "42P10" ||
+            msg.toLowerCase().includes("no unique or exclusion constraint")
+          ) {
+            p2pOrdersHasCompositePk = false;
+            const retry = await supabase.from("p2p_orders").upsert(rows);
+            return { error: retry.error };
+          }
+          return { error: res.error };
+        }
+        const res = await supabase.from("p2p_orders").upsert(rows);
+        return { error: res.error };
+      };
+
       for (let i = 0; i < fullPayload.length; i += UPSERT_CHUNK_SIZE) {
         const chunk = fullPayload.slice(i, i + UPSERT_CHUNK_SIZE);
         let needLegacyFallback = p2pOrdersHasV2Columns === false;
 
         if (!needLegacyFallback) {
-          const { error } = await supabase.from("p2p_orders").upsert(chunk);
+          const { error } = await upsertWithPkFallback(chunk);
           if (error) {
             p2pOrdersHasV2Columns = false;
             needLegacyFallback = true;
@@ -1073,9 +1222,7 @@ export class SupabaseVaultRepository {
             cost_basis_rate_ves: c.cost_basis_rate_ves,
             created_at: c.created_at,
           }));
-          const { error: legacyErr } = await supabase
-            .from("p2p_orders")
-            .upsert(legacyChunk);
+          const { error: legacyErr } = await upsertWithPkFallback(legacyChunk);
           if (!legacyErr) {
             anyRemoteSuccess = true;
           }
@@ -1892,14 +2039,57 @@ export class SupabaseVaultRepository {
   }
 
   /**
-   * Obtiene un cierre parcial (`ShiftClosure`) por su ID único.
+   * Obtiene un cierre parcial (`ShiftClosure`) por su ID único mediante consulta puntual
+   * (sin descargar el historial completo de `orders_json` de todas las jornadas del usuario).
    */
   public static async getShiftClosureById(
     userId: string,
     shiftId: string
   ): Promise<ShiftClosureDto | null> {
-    const all = await this.getAllUserShiftClosures(userId);
-    return all.find((s) => s.id === shiftId) ?? null;
+    try {
+      const { data, error } = await supabase
+        .from("p2p_shift_closures")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("id", shiftId)
+        .maybeSingle();
+
+      if (!error && data) {
+        const mapped = this.mapRowToShiftClosure(
+          data as Record<string, unknown>
+        );
+        if (mapped) return mapped;
+      }
+    } catch {
+      // Fallback
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("daily_closings")
+        .select("closing_date_label")
+        .eq("user_id", userId)
+        .eq("id", shiftId)
+        .maybeSingle();
+
+      if (!error && data?.closing_date_label) {
+        const parsed = JSON.parse(
+          String(data.closing_date_label)
+        ) as ShiftClosureDto;
+        if (parsed && parsed.id === shiftId) {
+          return parsed;
+        }
+      }
+    } catch {
+      // Fallback a bóveda local
+    }
+
+    const db = readLocalDb();
+    return (
+      (db.shiftClosures ?? []).find(
+        (s) => s.userId === userId && s.id === shiftId
+      ) ?? null
+    );
   }
 
   /**

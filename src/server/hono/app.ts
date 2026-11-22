@@ -769,6 +769,15 @@ export const routes = baseApp
             : "Cierre_Diario";
       const safeKey = report.periodKey.replace(/[^A-Za-z0-9_-]/g, "-");
 
+      const extraHeaders: Record<string, string> = {};
+      if (report.syncWarning) {
+        extraHeaders["X-P2P-Sync-Warning"] = encodeURIComponent(
+          report.syncWarning
+        );
+        extraHeaders["Access-Control-Expose-Headers"] =
+          "Content-Disposition, X-P2P-Sync-Warning";
+      }
+
       if (format === "pdf") {
         const pdfBytes = await buildClosingPdfBytes(report);
         return new Response(Buffer.from(pdfBytes), {
@@ -776,6 +785,7 @@ export const routes = baseApp
           headers: {
             "Content-Type": "application/pdf",
             "Content-Disposition": `attachment; filename="${prefix}_P2P_${safeKey}.pdf"`,
+            ...extraHeaders,
           },
         });
       }
@@ -787,6 +797,7 @@ export const routes = baseApp
           headers: {
             "Content-Type": "text/csv; charset=utf-8",
             "Content-Disposition": `attachment; filename="${prefix}_P2P_${safeKey}.csv"`,
+            ...extraHeaders,
           },
         });
       }
@@ -798,6 +809,7 @@ export const routes = baseApp
           "Content-Type":
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           "Content-Disposition": `attachment; filename="${prefix}_P2P_${safeKey}.xlsx"`,
+          ...extraHeaders,
         },
       });
     }

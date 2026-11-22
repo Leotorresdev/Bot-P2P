@@ -44,6 +44,7 @@ export function AccountantTaxView() {
   const [page, setPage] = React.useState<number>(1);
   const [isDownloadingExcel, setIsDownloadingExcel] = React.useState(false);
   const [downloadError, setDownloadError] = React.useState<string | null>(null);
+  const [downloadWarning, setDownloadWarning] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     setSelectedMonth((prev) => prev || getCurrentVetMonthIso());
@@ -92,6 +93,7 @@ export function AccountantTaxView() {
   const handleDownloadMonthlyExcel = async () => {
     setIsDownloadingExcel(true);
     setDownloadError(null);
+    setDownloadWarning(null);
     try {
       const monthParam = effectiveMonth;
       const url = `/api/p2p/export-closing?scope=MONTH&month=${encodeURIComponent(monthParam)}&format=xlsx`;
@@ -101,6 +103,10 @@ export function AccountantTaxView() {
       });
       if (!res.ok) {
         throw new Error("No se pudo generar el libro fiscal mensual en Excel.");
+      }
+      const rawWarning = res.headers.get("x-p2p-sync-warning");
+      if (rawWarning) {
+        setDownloadWarning(decodeURIComponent(rawWarning));
       }
       const blob = await res.blob();
       const objectUrl = URL.createObjectURL(blob);
@@ -185,6 +191,12 @@ export function AccountantTaxView() {
             </button>
           </div>
         </div>
+
+        {downloadWarning && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2 text-xs font-semibold text-amber-900 dark:border-[#FCD535]/35 dark:bg-[#FCD535]/10 dark:text-[#FCD535]">
+            {downloadWarning}
+          </div>
+        )}
 
         {downloadError && (
           <div className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-xs font-semibold text-rose-700 dark:border-[#F6465D]/35 dark:bg-[#F6465D]/10 dark:text-[#F6465D]">
