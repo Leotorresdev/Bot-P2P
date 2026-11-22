@@ -685,8 +685,8 @@ export function calculateVueltaSummary(params: {
     pendingUsdtDec = diffUsdt.abs();
   }
 
-  // 4. Ganancia Bruta de la Vuelta
-  const grossProfitBs = vueltaVolumeUsdt.mul(brechaPoints);
+  // 4. Ganancia Bruta (Volumen Total de Compra en USDT × Brecha)
+  const grossProfitBs = totalBoughtUsdt.mul(brechaPoints);
   const grossProfitUsdt = activeAvgBuy.gt(0)
     ? grossProfitBs.div(activeAvgBuy)
     : new Decimal(0);
@@ -873,12 +873,12 @@ export function buildAggregatedSummaryFromClosures(params: {
     ? totalBoughtVes.div(totalBoughtUsdt)
     : new Decimal(0);
 
-  // Brecha efectiva ponderada por el volumen real de vueltas diarias (coherente con Σ Ganancia Bruta Día)
-  const brechaPoints = vueltaVolumeUsdt.gt(0)
-    ? grossProfitVes.div(vueltaVolumeUsdt)
+  // Brecha efectiva ponderada por el volumen comprado diario (coherente con Σ Ganancia Bruta Día)
+  const brechaPoints = totalBoughtUsdt.gt(0)
+    ? grossProfitVes.div(totalBoughtUsdt)
     : new Decimal(0);
   const spreadPct =
-    vueltaVolumeUsdt.gt(0) && activeAvgBuy.gt(0)
+    totalBoughtUsdt.gt(0) && activeAvgBuy.gt(0)
       ? brechaPoints.div(activeAvgBuy).mul(100)
       : new Decimal(0);
 

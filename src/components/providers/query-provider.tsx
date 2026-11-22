@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Toaster } from "sonner";
 import { useThemeStore } from "@/features/p2p-ledger/store/use-theme-store";
 import { PwaProvider } from "@/components/providers/pwa-provider";
 
@@ -17,7 +18,18 @@ function ThemeSynchronizer() {
     }
   }, [theme]);
 
-  return null;
+  return (
+    <Toaster
+      theme={theme}
+      position="top-right"
+      richColors
+      closeButton
+      toastOptions={{
+        className:
+          "font-sans text-xs border border-slate-200 dark:border-[#2B3139]",
+      }}
+    />
+  );
 }
 
 export function QueryProvider({

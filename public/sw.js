@@ -1,4 +1,4 @@
-const CACHE_NAME = "bot-p2p-shell-v1";
+const CACHE_NAME = "bot-p2p-shell-v2";
 const PRECACHE_URLS = [
   "/offline.html",
   "/icon.svg",

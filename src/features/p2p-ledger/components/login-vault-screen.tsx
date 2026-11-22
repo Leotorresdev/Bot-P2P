@@ -278,6 +278,12 @@ export function LoginVaultScreen() {
         <div className="flex w-full flex-wrap items-center justify-end gap-2.5">
           <InstallAppButton variant="pill" />
           <Link
+            href="/demo"
+            className="inline-flex items-center gap-1.5 rounded-full border border-[#059669]/30 bg-[#ECFDF5] px-3.5 py-[6px] font-sans text-[11px] font-bold leading-[14px] text-[#047857] shadow-sm transition-all hover:border-[#059669] hover:bg-[#D1FAE5]"
+          >
+            <span>Demo Interactiva</span>
+          </Link>
+          <Link
             href="/planes"
             className="inline-flex items-center gap-1.5 rounded-full border border-[#2B3139] bg-[#0B0E11] px-3.5 py-[6px] font-sans text-[11px] font-bold leading-[14px] text-[#FCD535] shadow-sm transition-all hover:border-[#F0B90B] hover:bg-[#181A20]"
           >

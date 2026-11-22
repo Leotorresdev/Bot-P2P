@@ -13,13 +13,22 @@ import {
   History,
   Loader2,
   Play,
+  Radio,
   Square,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   useCloseShiftMutation,
   useShiftStateQuery,
   useStartShiftMutation,
 } from "@/features/p2p-ledger/api/use-p2p-queries";
+import { useAlertSettingsStore } from "@/features/p2p-ledger/store/use-alert-settings-store";
+import {
+  playShiftCloseSound,
+  playShiftStartSound,
+  showOsNotification,
+  unlockAudioContext,
+} from "@/lib/notification-sound";
 import {
   MERCHANT_BADGE_META,
   type ShiftClosureDto,
@@ -77,6 +86,13 @@ export function ShiftControlPanel({
   const shiftStateQuery = useShiftStateQuery(selectedHistoryDate || undefined);
   const startShiftMutation = useStartShiftMutation();
   const closeShiftMutation = useCloseShiftMutation();
+  const {
+    soundEnabled,
+    osNotificationsEnabled,
+    isWakeLockActive,
+    isBackgroundWorkerActive,
+  } = useAlertSettingsStore();
+  const isBackgroundAlive = isWakeLockActive || isBackgroundWorkerActive;
 
   const shiftState = shiftStateQuery.data;
   const activeShift = shiftState?.activeShift ?? null;
@@ -96,41 +112,77 @@ export function ShiftControlPanel({
   const handleStartShift = async () => {
     if (activeShift || startShiftMutation.isPending) return;
     setFeedbackBanner(null);
+    await unlockAudioContext();
     try {
       const res = await startShiftMutation.mutateAsync();
+      const msg =
+        res.message ||
+        "Jornada iniciada desde 0.00. Recopilando únicamente órdenes nuevas a partir de este instante.";
       setFeedbackBanner({
         type: "success",
-        message:
-          res.message ||
-          "Jornada iniciada desde 0.00. Recopilando únicamente órdenes nuevas a partir de este instante.",
+        message: msg,
       });
+      if (soundEnabled) {
+        void playShiftStartSound();
+      }
+      toast.success("Jornada iniciada", {
+        description: msg,
+        duration: 5500,
+      });
+      if (osNotificationsEnabled) {
+        void showOsNotification({
+          title: "🟢 Bot P2P — Jornada Iniciada",
+          body: msg,
+          tag: "bot-p2p-shift-start",
+        });
+      }
     } catch (err) {
+      const errMsg =
+        err instanceof Error ? err.message : "Error al iniciar la jornada.";
       setFeedbackBanner({
         type: "error",
-        message:
-          err instanceof Error ? err.message : "Error al iniciar la jornada.",
+        message: errMsg,
       });
+      toast.error("No se pudo iniciar la jornada", { description: errMsg });
     }
   };
 
   const handleCloseShift = async () => {
     if (!activeShift || closeShiftMutation.isPending) return;
     setFeedbackBanner(null);
+    await unlockAudioContext();
     try {
       const res = await closeShiftMutation.mutateAsync();
       setIsClosuresDrawerOpen(true);
+      const msg =
+        res.message ||
+        "Jornada cerrada y guardada. El panel principal quedó en espera (0.00) hasta el próximo inicio.";
       setFeedbackBanner({
         type: "info",
-        message:
-          res.message ||
-          "Jornada cerrada y guardada. El panel principal quedó en espera (0.00) hasta el próximo inicio.",
+        message: msg,
       });
+      if (soundEnabled) {
+        void playShiftCloseSound();
+      }
+      toast.info("Jornada cerrada y guardada", {
+        description: msg,
+        duration: 6000,
+      });
+      if (osNotificationsEnabled) {
+        void showOsNotification({
+          title: "🔴 Bot P2P — Jornada Cerrada",
+          body: msg,
+          tag: "bot-p2p-shift-close",
+        });
+      }
     } catch (err) {
+      const errMsg =
+        err instanceof Error ? err.message : "Error al cerrar la jornada.";
       setFeedbackBanner({
         type: "error",
-        message:
-          err instanceof Error ? err.message : "Error al cerrar la jornada.",
+        message: errMsg,
       });
+      toast.error("No se pudo cerrar la jornada", { description: errMsg });
     }
   };
 
@@ -208,7 +260,13 @@ export function ShiftControlPanel({
                   <strong className="font-mono tabular-nums text-slate-700 dark:text-[#EAECEF]">
                     {formatElapsedDuration(activeShift.shiftStartTimeMs, nowMs)}
                   </strong>{" "}
-                  · Cierre manual (permanece abierta hasta que presiones Cerrar)
+                  · Cierre manual
+                  {isBackgroundAlive && (
+                    <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-emerald-300/70 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:border-[#0ECB81]/35 dark:bg-[#0ECB81]/15 dark:text-[#0ECB81]">
+                      <Radio className="h-2.5 w-2.5" />
+                      <span>2do plano activo</span>
+                    </span>
+                  )}
                 </span>
               </div>
             </div>

@@ -83,7 +83,10 @@ export function useP2PSummaryQuery(params: P2PSummaryQueryParams) {
 export function useVenezuelanBanksQuery(
   buyAmount: number = 100_000,
   sellAmount: number = 100_000,
-  options?: { readonly enabled?: boolean }
+  options?: {
+    readonly enabled?: boolean;
+    readonly keepAliveInBackground?: boolean;
+  }
 ) {
   return useQuery({
     queryKey: p2pQueryKeys.banks(buyAmount, sellAmount),
@@ -103,7 +106,7 @@ export function useVenezuelanBanksQuery(
     enabled: options?.enabled ?? true,
     staleTime: 15_000,
     refetchInterval: 20_000,
-    refetchIntervalInBackground: false,
+    refetchIntervalInBackground: options?.keepAliveInBackground ?? false,
   });
 }
 
@@ -391,7 +394,10 @@ export function useUpdateTaxConfigMutation() {
   });
 }
 
-export function useShiftStateQuery(date?: string) {
+export function useShiftStateQuery(
+  date?: string,
+  options?: { readonly keepAliveInBackground?: boolean }
+) {
   return useQuery({
     queryKey: p2pQueryKeys.shifts(date),
     queryFn: async () => {
@@ -408,7 +414,7 @@ export function useShiftStateQuery(date?: string) {
     },
     staleTime: 20_000,
     refetchInterval: 45_000,
-    refetchIntervalInBackground: false,
+    refetchIntervalInBackground: options?.keepAliveInBackground ?? false,
   });
 }
 

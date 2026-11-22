@@ -5,6 +5,7 @@ import { Building2, RefreshCw } from "lucide-react";
 import { useVenezuelanBanksQuery } from "@/features/p2p-ledger/api/use-p2p-queries";
 import { ShiftControlPanel } from "@/features/p2p-ledger/components/shift-control-panel";
 import { TradingViewP2PChart } from "@/features/p2p-ledger/components/tradingview-p2p-chart";
+import { BrechaAlertsControl } from "@/features/p2p-ledger/components/brecha-alerts-control";
 import { formatDecimalWithCommas } from "@/lib/format-currency";
 import { cn } from "@/lib/utils";
 
@@ -264,21 +265,24 @@ export function LiveMarketView({
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => void banksQuery.refetch()}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-[10px] font-bold text-slate-700 transition-colors hover:bg-slate-100 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:hover:border-[#FCD535]/50"
-                title="Actualizar cotizaciones Binance C2C"
-              >
-                <RefreshCw
-                  className={cn(
-                    "h-3 w-3",
-                    banksQuery.isFetching &&
-                      "animate-spin text-emerald-600 dark:text-[#FCD535]"
-                  )}
-                />
-                <span>Actualizar Vivo</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <BrechaAlertsControl />
+                <button
+                  type="button"
+                  onClick={() => void banksQuery.refetch()}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-[10px] font-bold text-slate-700 transition-colors hover:bg-slate-100 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:hover:border-[#FCD535]/50"
+                  title="Actualizar cotizaciones Binance C2C"
+                >
+                  <RefreshCw
+                    className={cn(
+                      "h-3 w-3",
+                      banksQuery.isFetching &&
+                        "animate-spin text-emerald-600 dark:text-[#FCD535]"
+                    )}
+                  />
+                  <span>Actualizar Vivo</span>
+                </button>
+              </div>
             </div>
 
             {/* Filtros de Monto: Venta en VERDE, Compra en ROJO + Sugeridos 20k/50k/100k */}

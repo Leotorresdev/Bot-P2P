@@ -1,9 +1,11 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Download,
+  Headphones,
   Lock,
   Unlock,
   RefreshCw,
@@ -205,6 +207,16 @@ export function TopNavigationBar() {
       <div className="flex flex-wrap items-center gap-2">
         {/* Botón Instalar App PWA (solo aparece si aún no está instalada) */}
         <InstallAppButton variant="navbar" />
+
+        {/* Botón Soporte -> Planes & WhatsApp */}
+        <Link
+          href="/planes"
+          title="Soporte técnico, planes y demo interactiva"
+          className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 transition-all hover:border-[#FCD535]/60 hover:bg-amber-50/70 dark:border-[#2B3139] dark:bg-[#1E2329] dark:text-[#EAECEF] dark:hover:border-[#FCD535]/60 dark:hover:text-[#FCD535]"
+        >
+          <Headphones className="h-3.5 w-3.5 text-emerald-600 dark:text-[#FCD535]" />
+          <span>Soporte</span>
+        </Link>
 
         {/* Botón Toggle Tema Claro / Oscuro (Zustand) */}
         <button

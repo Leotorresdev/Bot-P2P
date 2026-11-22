@@ -10,6 +10,7 @@ import { LiveOperationsLedger } from "@/features/p2p-ledger/components/live-oper
 import { SecurityAndClosingsView } from "@/features/p2p-ledger/components/security-and-closings-view";
 import { AccountantTaxView } from "@/features/p2p-ledger/components/accountant-tax-view";
 import { ClosingExportModal } from "@/features/p2p-ledger/components/closing-export-panel";
+import { ShiftBackgroundAndAlertsProvider } from "@/components/providers/shift-background-and-alerts-provider";
 import type {
   LotMethod,
   PeriodFilter,
@@ -45,6 +46,10 @@ export function P2PDashboardShell() {
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-[1536px] flex-col gap-4 bg-[#F4F7F9] px-3 py-4 transition-colors dark:bg-[#0B0E11] sm:px-6 sm:py-6">
+      <ShiftBackgroundAndAlertsProvider
+        buyBrechaAmount={buyBrechaAmount}
+        sellBrechaAmount={sellBrechaAmount}
+      />
       <TopNavigationBar />
 
       {activeTab === "MARKET_LIVE" ? (

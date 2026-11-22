@@ -13,10 +13,14 @@ import {
   Clock,
   Copy,
   FileSpreadsheet,
+  Headphones,
   History,
   Layers,
   Lock,
+  MessageCircle,
+  Phone,
   PieChart,
+  PlayCircle,
   Plus,
   RotateCcw,
   ShieldCheck,
@@ -56,6 +60,13 @@ const SKILL_ICONS: Record<
   team: Users,
   reconcile: Wallet,
 };
+
+const SUPPORT_WHATSAPP_NUMBER_DISPLAY = "0424-7807851";
+const SUPPORT_WHATSAPP_E164 = "584247807851";
+
+function buildWhatsAppUrl(message: string): string {
+  return `https://wa.me/${SUPPORT_WHATSAPP_E164}?text=${encodeURIComponent(message)}`;
+}
 
 export function PlansShowcaseScreen() {
   const [selectedSkillIds, setSelectedSkillIds] = React.useState<string[]>([]);
@@ -149,11 +160,29 @@ export function PlansShowcaseScreen() {
 
           <div className="flex flex-wrap items-center gap-2">
             <Link
-              href="/login"
+              href="/demo"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-[#0ECB81]/45 bg-[#0ECB81]/15 px-3.5 py-2 text-xs font-extrabold text-[#0ECB81] transition-all hover:bg-[#0ECB81]/25"
+            >
+              <PlayCircle className="h-3.5 w-3.5" />
+              <span>Demo Interactiva</span>
+            </Link>
+            <a
+              href={buildWhatsAppUrl(
+                "Hola, necesito soporte / información sobre Bot P2P Venezuela."
+              )}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-600 px-3.5 py-2 text-xs font-extrabold text-white shadow-sm transition-all hover:bg-emerald-500"
+            >
+              <MessageCircle className="h-3.5 w-3.5" />
+              <span>WhatsApp {SUPPORT_WHATSAPP_NUMBER_DISPLAY}</span>
+            </a>
+            <Link
+              href="/"
               className="inline-flex items-center gap-1.5 rounded-xl border border-[#2B3139] bg-[#1E2329] px-3.5 py-2 text-xs font-bold text-[#EAECEF] transition-all hover:border-[#FCD535]/50 hover:bg-[#2B3139]"
             >
               <ArrowLeft className="h-3.5 w-3.5 text-[#848E9C]" />
-              <span>Iniciar Sesión</span>
+              <span>Ir al Bot</span>
             </Link>
             <Link
               href="/register"
@@ -730,6 +759,20 @@ export function PlansShowcaseScreen() {
                       </div>
                     </div>
 
+                    <a
+                      href={buildWhatsAppUrl(
+                        `Hola, quiero activar mi suscripción de Bot P2P:\n${buildCopyText()}`
+                      )}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#25D366] px-3 py-2.5 text-xs font-extrabold text-[#0B0E11] shadow-sm transition-all hover:bg-[#22c35e]"
+                    >
+                      <MessageCircle className="h-4 w-4" />
+                      <span>
+                        Escribir por WhatsApp ({SUPPORT_WHATSAPP_NUMBER_DISPLAY})
+                      </span>
+                    </a>
+
                     <button
                       type="button"
                       onClick={handleCopySummary}
@@ -771,6 +814,48 @@ export function PlansShowcaseScreen() {
                   </Link>
                 </p>
               </div>
+            </div>
+
+            {/* Tarjeta Fija de Soporte Directo WhatsApp + Demo Interactiva */}
+            <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-[#2B3139] bg-[#181A20] p-5 shadow-lg">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#25D366]/35 bg-[#25D366]/15 text-[#25D366]">
+                  <Headphones className="h-5 w-5" />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-xs font-extrabold text-[#EAECEF]">
+                    Soporte Directo &amp; Activación
+                  </span>
+                  <span className="font-mono text-xs font-bold text-[#25D366]">
+                    +58 {SUPPORT_WHATSAPP_NUMBER_DISPLAY}
+                  </span>
+                </div>
+              </div>
+
+              <p className="text-[11px] leading-relaxed text-[#848E9C]">
+                ¿Tienes dudas, quieres activar tu cuenta o necesitas ayuda con
+                tu API Key de Binance? Escríbenos directo por WhatsApp.
+              </p>
+
+              <a
+                href={buildWhatsAppUrl(
+                  "Hola, vengo desde Bot P2P Venezuela y necesito soporte / información de planes."
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#25D366] px-4 py-2.5 text-xs font-extrabold text-[#0B0E11] shadow-sm transition-all hover:bg-[#22c35e] active:scale-[0.99]"
+              >
+                <Phone className="h-3.5 w-3.5" />
+                <span>WhatsApp {SUPPORT_WHATSAPP_NUMBER_DISPLAY}</span>
+              </a>
+
+              <Link
+                href="/demo"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[#0ECB81]/40 bg-[#0ECB81]/10 px-4 py-2.5 text-xs font-extrabold text-[#0ECB81] transition-all hover:bg-[#0ECB81]/20"
+              >
+                <PlayCircle className="h-4 w-4" />
+                <span>Probar Demo Interactiva Gratis</span>
+              </Link>
             </div>
           </aside>
         </div>
