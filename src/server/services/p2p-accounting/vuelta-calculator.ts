@@ -265,6 +265,12 @@ export function calculateVueltaSummary(params: {
     totalBoughtUsdt: formatDecimalMoney(totalBoughtUsdt, 2),
     totalBoughtVes: formatDecimalMoney(totalBoughtVes, 2),
     totalVolumeUsdt: formatDecimalMoney(totalVolumeUsdt, 2),
+    grossSoldUsdt: formatDecimalMoney(exactSoldUsdtForAvg, 2),
+    grossBoughtUsdt: formatDecimalMoney(exactBoughtUsdtForAvg, 2),
+    grossVolumeUsdt: formatDecimalMoney(
+      exactSoldUsdtForAvg.plus(exactBoughtUsdtForAvg),
+      2
+    ),
 
     avgSellRateWeightedVes: formatDecimalMoney(activeAvgSell, 2),
     avgBuyRateWeightedVes: formatDecimalMoney(activeAvgBuy, 2),
@@ -459,6 +465,13 @@ export function buildAggregatedSummaryFromClosures(params: {
   const seniatTaxUsdtDec = Decimal.max(0, netProfitUsdt).mul(seniatRateDec);
   const seniatTaxBsDec = Decimal.max(0, netProfitBs).mul(seniatRateDec);
 
+  const grossSoldUsdt = orderTotals
+    ? orderTotals.exactSoldUsdtForAvg
+    : totalSoldUsdt;
+  const grossBoughtUsdt = orderTotals
+    ? orderTotals.exactBoughtUsdtForAvg
+    : totalBoughtUsdt;
+
   return {
     period,
     periodLabel,
@@ -473,6 +486,9 @@ export function buildAggregatedSummaryFromClosures(params: {
     totalBoughtUsdt: formatDecimalMoney(totalBoughtUsdt, 2),
     totalBoughtVes: formatDecimalMoney(totalBoughtVes, 2),
     totalVolumeUsdt: formatDecimalMoney(totalVolumeUsdt, 2),
+    grossSoldUsdt: formatDecimalMoney(grossSoldUsdt, 2),
+    grossBoughtUsdt: formatDecimalMoney(grossBoughtUsdt, 2),
+    grossVolumeUsdt: formatDecimalMoney(grossSoldUsdt.plus(grossBoughtUsdt), 2),
 
     avgSellRateWeightedVes: formatDecimalMoney(activeAvgSell, 2),
     avgBuyRateWeightedVes: formatDecimalMoney(activeAvgBuy, 2),

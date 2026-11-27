@@ -521,7 +521,7 @@ export function BentoModulesGrid({
                 : "0.00 Bs."}
             </span>
             <span className="text-[10px] text-slate-400 dark:text-[#848E9C]">
-              Bruta - Insignia
+              Bruta − Com. Binance
             </span>
           </div>
         </div>
@@ -570,6 +570,15 @@ export function BentoModulesGrid({
               </span>
             )}
           </div>
+          {summary?.grossBoughtUsdt && (
+            <p className="mt-1 font-mono text-[10px] text-slate-400 dark:text-[#848E9C]">
+              Base:{" "}
+              <strong className="text-slate-600 dark:text-[#EAECEF]">
+                {formatDecimalWithCommas(summary.grossBoughtUsdt)} USDT bruto
+              </strong>{" "}
+              × {summary.brechaPointsVes} pts
+            </p>
+          )}
         </div>
 
         {/* KPI 3: Precio Promedio Venta vs Compra & Brecha de Puntos */}
@@ -671,6 +680,14 @@ export function BentoModulesGrid({
           <p className="font-mono text-xs font-semibold tabular-nums text-slate-600 dark:text-[#848E9C]">
             {summary ? formatVesAmount(summary.totalSoldVes) : "0.00 Bs."}
           </p>
+          {summary?.grossSoldUsdt && (
+            <p className="mt-0.5 font-mono text-[10px] text-slate-400 dark:text-[#848E9C]">
+              App Binance · Bruto:{" "}
+              <strong className="text-slate-600 dark:text-[#EAECEF]">
+                {formatDecimalWithCommas(summary.grossSoldUsdt)} USDT
+              </strong>
+            </p>
+          )}
         </div>
 
         {/* KPI 6: Total Comprados (COMPRA - Verde Binance) */}
@@ -689,6 +706,14 @@ export function BentoModulesGrid({
           <p className="font-mono text-xs font-semibold tabular-nums text-slate-600 dark:text-[#848E9C]">
             {summary ? formatVesAmount(summary.totalBoughtVes) : "0.00 Bs."}
           </p>
+          {summary?.grossBoughtUsdt && (
+            <p className="mt-0.5 font-mono text-[10px] text-slate-400 dark:text-[#848E9C]">
+              App Binance · Bruto:{" "}
+              <strong className="text-slate-600 dark:text-[#EAECEF]">
+                {formatDecimalWithCommas(summary.grossBoughtUsdt)} USDT
+              </strong>
+            </p>
+          )}
         </div>
 
         {/* KPI 7: Volumen Total Movido (Compra + Venta) */}

@@ -553,6 +553,11 @@ export function ShiftControlPanel({
                         <p className="font-mono text-[10px] tabular-nums text-slate-600 dark:text-[#848E9C]">
                           {formatVesAmount(s.totalBoughtVes)}
                         </p>
+                        {s.grossBoughtUsdt && (
+                          <p className="font-mono text-[9px] text-slate-400 dark:text-[#848E9C]">
+                            Bruto: {formatDecimalWithCommas(s.grossBoughtUsdt)} USDT
+                          </p>
+                        )}
                       </div>
 
                       <div className="rounded-lg border border-slate-200/80 bg-white px-2.5 py-1.5 dark:border-[#2B3139] dark:bg-[#181A20]">
@@ -565,6 +570,11 @@ export function ShiftControlPanel({
                         <p className="font-mono text-[10px] tabular-nums text-slate-600 dark:text-[#848E9C]">
                           {formatVesAmount(s.totalSoldVes)}
                         </p>
+                        {s.grossSoldUsdt && (
+                          <p className="font-mono text-[9px] text-slate-400 dark:text-[#848E9C]">
+                            Bruto: {formatDecimalWithCommas(s.grossSoldUsdt)} USDT
+                          </p>
+                        )}
                       </div>
 
                       <div className="rounded-lg border border-slate-200/80 bg-white px-2.5 py-1.5 dark:border-[#2B3139] dark:bg-[#181A20]">
@@ -575,7 +585,7 @@ export function ShiftControlPanel({
                           {formatUsdtAmount(s.totalVolumeUsdt)}
                         </p>
                         <p className="text-[10px] text-slate-500 dark:text-[#848E9C]">
-                           Prom. C: {s.activeAvgBuyRateVes} | V:{" "}
+                          Prom. C: {s.activeAvgBuyRateVes} | V:{" "}
                           {s.activeAvgSellRateVes}
                         </p>
                       </div>
@@ -590,11 +600,16 @@ export function ShiftControlPanel({
                         <p className="font-mono text-[10px] tabular-nums text-slate-600 dark:text-[#848E9C]">
                           Bruta: {formatVesAmount(s.grossProfitVes)}
                         </p>
+                        {s.grossBoughtUsdt && (
+                          <p className="font-mono text-[9px] text-slate-400 dark:text-[#848E9C]">
+                            Base: {formatDecimalWithCommas(s.grossBoughtUsdt)} × {s.brechaPointsVes}
+                          </p>
+                        )}
                       </div>
 
                       <div className="rounded-lg border border-slate-200/80 bg-white px-2.5 py-1.5 dark:border-[#2B3139] dark:bg-[#181A20]">
                         <p className="text-[10px] font-bold text-slate-500 dark:text-[#848E9C]">
-                          Comisión Volumen
+                          Comisión Real Binance
                         </p>
                         <p className="font-mono text-xs font-extrabold tabular-nums text-amber-700 dark:text-[#FCD535]">
                           -{formatUsdtAmount(s.volumeCommissionUsdt)}

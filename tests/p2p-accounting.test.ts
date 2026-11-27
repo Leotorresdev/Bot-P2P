@@ -127,6 +127,9 @@ test("Regresión real Jornada 2 (14 órdenes reales Binance con truncado a 2 dec
   assert.equal(summary.totalBoughtUsdt, "288.34");
   assert.equal(summary.totalSoldUsdt, "264.47");
   assert.equal(summary.totalVolumeUsdt, "552.81");
+  assert.equal(summary.grossBoughtUsdt, "289.04");
+  assert.equal(summary.grossSoldUsdt, "263.85");
+  assert.equal(summary.grossVolumeUsdt, "552.89");
   assert.equal(summary.activeAvgBuyRateVes, "1,074.20");
   assert.equal(summary.activeAvgSellRateVes, "1,084.19");
   assert.equal(summary.brechaPointsVes, "+9.99");

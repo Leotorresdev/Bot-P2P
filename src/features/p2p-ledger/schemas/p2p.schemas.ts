@@ -289,12 +289,16 @@ export interface PnlSummaryDto {
   readonly merchantBadgeLabel: string;
   readonly badgeFeePercent: string;
   readonly badgeFeeFactor: string;
-  // Volúmenes completados
+  // Volúmenes completados (App Binance: neto recibido en compra, total debitado en venta)
   readonly totalSoldUsdt: string;
   readonly totalSoldVes: string;
   readonly totalBoughtUsdt: string;
   readonly totalBoughtVes: string;
   readonly totalVolumeUsdt: string;
+  // Volúmenes brutos exactos sin comisión (base matemática de promedios y ganancia bruta)
+  readonly grossSoldUsdt?: string;
+  readonly grossBoughtUsdt?: string;
+  readonly grossVolumeUsdt?: string;
   // Promedios Ponderados y Brecha
   readonly avgSellRateWeightedVes: string;
   readonly avgBuyRateWeightedVes: string;
