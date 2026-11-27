@@ -23,6 +23,7 @@ import type {
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
 import { useLedgerUiStore } from "@/features/p2p-ledger/store/use-ledger-ui-store";
 import {
+  formatBinanceAppOrderUsdt,
   formatDecimalWithCommas,
   formatUsdtAmount,
   formatVesAmount,
@@ -477,7 +478,7 @@ export function LiveOperationsLedger({
                       {formatDecimalWithCommas(order.unitPriceVes)} Bs.
                     </td>
                     <td className="px-3.5 py-2.5 text-right font-mono font-extrabold text-slate-900">
-                      {formatUsdtAmount(order.amountUsdt)}
+                      {formatBinanceAppOrderUsdt(order)}
                     </td>
                     <td className="px-3.5 py-2.5 text-right font-mono font-extrabold text-slate-900">
                       {formatVesAmount(order.totalPriceVes)}

@@ -8,7 +8,7 @@
 
 | Área | Decisión Actual | Archivos Clave |
 | :--- | :--- | :--- |
-| **Motor de Ganancias** | `Ganancia Bruta (Bs) = totalBoughtUsdt × Brecha`; `Ganancia Neta = Ganancia Bruta - Comisión Insignia sobre Volumen Total`. Insignias: Bronce `0.20%`, Plata `0.175%`, Oro `0.125%`. | `src/server/services/p2p-accounting.service.ts` |
+| **Motor de Ganancias** | Volúmenes visibles exactos a la app móvil de Binance (`BUY: amount - commission`, `SELL: amount + commission`). Promedios limpios sin comisión ni truncado (`Σ Bs ÷ Σ(Bs ÷ unitPrice)`). `Ganancia Bruta = exactBoughtUsdtForAvg × Brecha`; `Ganancia Neta = Ganancia Bruta − Σ commissionUsdt` real de Binance (restada 1 sola vez). | `src/server/services/p2p-accounting/vuelta-calculator.ts`, `src/lib/format-currency.ts` |
 | **Cálculo Mensual** | **Suma exacta día por día (VET)** con `Decimal.js` tanto en Excel/PDF/CSV como en UI (`getSummary(period: "MONTH")`). Evita ganancias negativas falsas cuando cambia la tasa del Bs. durante el mes. | `p2p-accounting.service.ts` (`buildDailyBreakdownAndMonthlySummary`) |
 | **Filtro de Órdenes** | Fuente única de verdad `evaluateOrderCalculationEligibility`: **solo `COMPLETED` + `USDT` + `VES`**. Descarta canceladas, expiradas, apeladas, en curso, otras fiat (`USD`, `COP`) y otros criptoactivos (`BTC`, `ETH`, `USDC`, `BNB`, `FDUSD`). | `p2p-accounting.service.ts` |
 | **Excel (.XLSX)** | 3 hojas auditables: (1) `Resumen y Cierre` (valores numéricos + tabla Día por Día con `=SUM`), (2) `Completadas USDT-VES` (solo órdenes del cálculo con `=SUMIF`/`=SUM`), (3) `Espejo Completo Binance` (todas las órdenes con `Activo`, `Fiat`, `Comisión` y `¿Incluida en Cálculo?`). | `src/server/services/p2p-export.service.ts` |

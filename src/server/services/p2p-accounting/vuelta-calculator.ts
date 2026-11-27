@@ -7,6 +7,7 @@ import {
   type PeriodFilter,
   type PnlSummaryDto,
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
+import { getBinanceAppOrderUsdtDecimal } from "@/lib/format-currency";
 import {
   UTC_MINUS_4_OFFSET_MS,
   formatDateIsoVe,
@@ -28,13 +29,20 @@ import {
 } from "./order-eligibility";
 
 export interface WeightedOrderTotals {
+  /** Total vendido en USDT tal como lo refleja la app móvil de Binance: Σ(amount + commission) */
   readonly totalSoldUsdt: Decimal;
   readonly totalSoldVes: Decimal;
+  /** Total comprado en USDT tal como lo refleja la app móvil de Binance: Σ(amount - commission) */
   readonly totalBoughtUsdt: Decimal;
   readonly totalBoughtVes: Decimal;
-  /** Promedio de precio de venta = Σ(órdenes de venta en Bs) ÷ Σ(órdenes de venta en USDT) */
+  /** USDT exactos sin comisión ni truncado de Binance (Σ Bs ÷ precioUnitario) para promedios y ganancia bruta exactos */
+  readonly exactSoldUsdtForAvg: Decimal;
+  readonly exactBoughtUsdtForAvg: Decimal;
+  /** Comisión real exacta reportada por Binance sumada de cada orden elegible (Σ commissionUsdt) */
+  readonly totalBinanceCommissionUsdt: Decimal;
+  /** Promedio ponderado exacto de venta SIN comisión ni truncado: Σ(Bs venta) ÷ Σ(Bs venta ÷ precioUnitario) */
   readonly activeAvgSell: Decimal;
-  /** Promedio de precio de compra = Σ(órdenes de compra en Bs) ÷ Σ(órdenes de compra en USDT) */
+  /** Promedio ponderado exacto de compra SIN comisión ni truncado: Σ(Bs compra) ÷ Σ(Bs compra ÷ precioUnitario) */
   readonly activeAvgBuy: Decimal;
   readonly completedSellCount: number;
   readonly completedBuyCount: number;
@@ -45,10 +53,17 @@ export interface WeightedOrderTotals {
 }
 
 /**
- * Calcula los totales exactos en Bs y USDT y los promedios ponderados exactos
- * a partir de las órdenes deduplicadas por `orderNumber` y filtradas por elegibilidad (`COMPLETED + USDT + VES`):
- * - Promedio de precio de compra = Σ(órdenes de compra en Bs) ÷ Σ(órdenes de compra en USDT)
- * - Promedio de precio de venta  = Σ(órdenes de venta en Bs)  ÷ Σ(órdenes de venta en USDT)
+ * Calcula los totales exactos en Bs y USDT y los promedios ponderados limpios (sin comisión
+ * y sin distorsión por el truncado a 2 decimales de Binance) sobre órdenes deduplicadas y
+ * elegibles (`COMPLETED + USDT + VES`):
+ * - Volumen visible por orden = exacto de la app móvil de Binance:
+ *   - COMPRA: `amount - commission` ("Cantidad recibida")
+ *   - VENTA:  `amount + commission` ("Cantidad total")
+ * - Promedios de compra y venta (SIN comisión ni truncado):
+ *   - `usdtSinComision = totalBs ÷ unitPriceVes`
+ *   - `Prom. Compra = Σ(Bs compra) ÷ Σ(usdtSinComision compra)`
+ *   - `Prom. Venta  = Σ(Bs venta)  ÷ Σ(usdtSinComision venta)`
+ * - Comisión real = `Σ(commissionUsdt)` reportada directamente por Binance en cada orden.
  */
 export function calculateWeightedOrderTotals(
   orders: readonly P2POrderRowDto[]
@@ -59,6 +74,9 @@ export function calculateWeightedOrderTotals(
   let totalSoldVes = new Decimal(0);
   let totalBoughtUsdt = new Decimal(0);
   let totalBoughtVes = new Decimal(0);
+  let exactSoldUsdtForAvg = new Decimal(0);
+  let exactBoughtUsdtForAvg = new Decimal(0);
+  let totalBinanceCommissionUsdt = new Decimal(0);
 
   let completedSellCount = 0;
   let completedBuyCount = 0;
@@ -86,27 +104,37 @@ export function calculateWeightedOrderTotals(
       continue;
     }
 
-    const amt = parseSafeDecimal(order.amountUsdt);
+    const amtRaw = parseSafeDecimal(order.amountUsdt);
+    const comm = parseSafeDecimal(order.commissionUsdt);
     const price = parseSafeDecimal(order.unitPriceVes);
     const parsedTotal = parseSafeDecimal(order.totalPriceVes);
-    const total = parsedTotal.gt(0) ? parsedTotal : amt.mul(price);
+    const totalBs = parsedTotal.gt(0) ? parsedTotal : amtRaw.mul(price);
+
+    // Peso exacto en USDT antes de comisiones y antes del truncado a 2 decimales de Binance
+    const exactUsdtNoComm = price.gt(0) ? totalBs.div(price) : amtRaw;
+    // Monto exacto reflejado en la app móvil de Binance
+    const appDisplayUsdt = getBinanceAppOrderUsdtDecimal(order);
 
     if (order.tradeType === "SELL") {
       completedSellCount += 1;
-      totalSoldUsdt = totalSoldUsdt.plus(amt);
-      totalSoldVes = totalSoldVes.plus(total);
+      totalSoldUsdt = totalSoldUsdt.plus(appDisplayUsdt);
+      totalSoldVes = totalSoldVes.plus(totalBs);
+      exactSoldUsdtForAvg = exactSoldUsdtForAvg.plus(exactUsdtNoComm);
+      totalBinanceCommissionUsdt = totalBinanceCommissionUsdt.plus(comm);
     } else if (order.tradeType === "BUY") {
       completedBuyCount += 1;
-      totalBoughtUsdt = totalBoughtUsdt.plus(amt);
-      totalBoughtVes = totalBoughtVes.plus(total);
+      totalBoughtUsdt = totalBoughtUsdt.plus(appDisplayUsdt);
+      totalBoughtVes = totalBoughtVes.plus(totalBs);
+      exactBoughtUsdtForAvg = exactBoughtUsdtForAvg.plus(exactUsdtNoComm);
+      totalBinanceCommissionUsdt = totalBinanceCommissionUsdt.plus(comm);
     }
   }
 
-  const activeAvgSell = totalSoldUsdt.gt(0)
-    ? totalSoldVes.div(totalSoldUsdt)
+  const activeAvgSell = exactSoldUsdtForAvg.gt(0)
+    ? totalSoldVes.div(exactSoldUsdtForAvg)
     : new Decimal(0);
-  const activeAvgBuy = totalBoughtUsdt.gt(0)
-    ? totalBoughtVes.div(totalBoughtUsdt)
+  const activeAvgBuy = exactBoughtUsdtForAvg.gt(0)
+    ? totalBoughtVes.div(exactBoughtUsdtForAvg)
     : new Decimal(0);
 
   return {
@@ -114,6 +142,9 @@ export function calculateWeightedOrderTotals(
     totalSoldVes,
     totalBoughtUsdt,
     totalBoughtVes,
+    exactSoldUsdtForAvg,
+    exactBoughtUsdtForAvg,
+    totalBinanceCommissionUsdt,
     activeAvgSell,
     activeAvgBuy,
     completedSellCount,
@@ -126,9 +157,12 @@ export function calculateWeightedOrderTotals(
 }
 
 /**
- * Motor puro de cálculo por "Vuelta" y Brecha de Puntos basado en promedios ponderados exactos
- * de Venta y Compra y comisión de Insignia (Bronce/Plata/Oro) sobre Volumen Total.
- * Solo las órdenes COMPLETED en USDT/VES (deduplicadas por `orderNumber`) suman al volumen y ganancias.
+ * Motor puro de cálculo por "Vuelta" y Brecha de Puntos:
+ * - Volúmenes visibles en USDT = exactos de la app móvil de Binance (BUY: amount - comm, SELL: amount + comm).
+ * - Promedios Compra/Venta = ponderados limpios sin comisión ni truncado (Σ Bs ÷ Σ(Bs ÷ precioUnitario)).
+ * - Ganancia Bruta = exactBoughtUsdtForAvg × Brecha (100% exacta, sin sesgo de comisión).
+ * - Comisión = suma real exacta reportada por Binance en cada orden (`Σ commissionUsdt`), restada UNA sola vez.
+ * - Ganancia Neta Real = Ganancia Bruta − Comisión Real Binance.
  */
 export function calculateVueltaSummary(params: {
   readonly orders: readonly P2POrderRowDto[];
@@ -155,6 +189,9 @@ export function calculateVueltaSummary(params: {
     totalSoldVes,
     totalBoughtUsdt,
     totalBoughtVes,
+    exactBoughtUsdtForAvg,
+    exactSoldUsdtForAvg,
+    totalBinanceCommissionUsdt,
     activeAvgSell,
     activeAvgBuy,
     completedSellCount,
@@ -165,8 +202,9 @@ export function calculateVueltaSummary(params: {
     uniqueOrdersCount,
   } = totals;
 
-  // 2. Brecha de Puntos (solo cuando ambos lados tienen volumen completado)
-  const hasBothSides = totalSoldUsdt.gt(0) && totalBoughtUsdt.gt(0);
+  // 2. Brecha de Puntos pura (sin comisión, solo cuando ambos lados tienen volumen completado)
+  const hasBothSides =
+    exactSoldUsdtForAvg.gt(0) && exactBoughtUsdtForAvg.gt(0);
   const brechaPoints = hasBothSides
     ? activeAvgSell.minus(activeAvgBuy)
     : new Decimal(0);
@@ -176,7 +214,7 @@ export function calculateVueltaSummary(params: {
       ? brechaPoints.div(activeAvgBuy).mul(100)
       : new Decimal(0);
 
-  // 3. Volumen de la Vuelta y Excedente Pendiente
+  // 3. Volumen de la Vuelta y Excedente Pendiente (en USDT exactos de billetera/app Binance)
   const vueltaVolumeUsdt = Decimal.min(totalSoldUsdt, totalBoughtUsdt);
   const diffUsdt = totalSoldUsdt.minus(totalBoughtUsdt);
 
@@ -190,20 +228,19 @@ export function calculateVueltaSummary(params: {
     pendingUsdtDec = diffUsdt.abs();
   }
 
-  // 4. Ganancia Bruta (Volumen Total de Compra en USDT × Brecha)
-  const grossProfitBs = totalBoughtUsdt.mul(brechaPoints);
+  // 4. Ganancia Bruta exacta (Volumen Compra sin comisión × Brecha limpia sin comisión)
+  const grossProfitBs = exactBoughtUsdtForAvg.mul(brechaPoints);
   const grossProfitUsdt = activeAvgBuy.gt(0)
     ? grossProfitBs.div(activeAvgBuy)
     : new Decimal(0);
 
-  // 5. Volumen Total Movido y Comisión por Insignia
+  // 5. Volumen Total Movido (exacto App Binance) y Comisión Real de Binance (sumada de cada orden, 1 sola vez)
   const totalVolumeUsdt = totalSoldUsdt.plus(totalBoughtUsdt);
-  const badgeFactorDec = new Decimal(badgeMeta.feeFactor);
-  const volumeCommissionUsdt = totalVolumeUsdt.mul(badgeFactorDec);
+  const volumeCommissionUsdt = totalBinanceCommissionUsdt;
   const rateForCommissionBs = activeAvgBuy.gt(0) ? activeAvgBuy : activeAvgSell;
   const volumeCommissionBs = volumeCommissionUsdt.mul(rateForCommissionBs);
 
-  // 6. Ganancia Neta Final (descontando Comisión de Insignia sobre el Volumen Total)
+  // 6. Ganancia Neta Real Final (descontando Comisión Real Binance una única vez)
   const netProfitUsdt = grossProfitUsdt.minus(volumeCommissionUsdt);
   const netProfitBs = grossProfitBs.minus(volumeCommissionBs);
 
@@ -277,9 +314,8 @@ export function calculateVueltaSummary(params: {
 /**
  * Agrega una colección de resúmenes de cierres (por ejemplo, todos los `DailyTotalClosure`
  * de un mes para el Cierre Mensual, o todos los `ShiftClosure` de un día):
- * - Los totales en Bs/USDT y los promedios ponderados (`Σ Bs ÷ Σ USDT`) se calculan
- *   directamente desde las órdenes deduplicadas (cuando están presentes) para eliminar
- *   deriva de redondeo y doble conteo entre cierres.
+ * - Los totales en Bs/USDT y los promedios ponderados limpios (sin comisión ni truncado) se calculan
+ *   directamente desde las órdenes deduplicadas cuando están presentes.
  * - Las ganancias brutas/netas y comisiones se agregan día por día (anti falso negativo cambiario).
  */
 export function buildAggregatedSummaryFromClosures(params: {
@@ -353,7 +389,6 @@ export function buildAggregatedSummaryFromClosures(params: {
     summaryInProgressCount += s.inProgressCount;
   }
 
-  // Usar totales exactos desde órdenes deduplicadas cuando estén disponibles (evita redondeo acumulado y doble conteo)
   const totalSoldUsdt = orderTotals ? orderTotals.totalSoldUsdt : summarySoldUsdt;
   const totalSoldVes = orderTotals ? orderTotals.totalSoldVes : summarySoldVes;
   const totalBoughtUsdt = orderTotals
@@ -383,21 +418,28 @@ export function buildAggregatedSummaryFromClosures(params: {
     ? orderTotals.uniqueOrdersCount
     : orders.length;
 
-  // Promedio de precio de venta = Σ(órdenes de venta en Bs) ÷ Σ(órdenes de venta en USDT)
-  // Promedio de precio de compra = Σ(órdenes de compra en Bs) ÷ Σ(órdenes de compra en USDT)
-  const activeAvgSell = totalSoldUsdt.gt(0)
-    ? totalSoldVes.div(totalSoldUsdt)
-    : new Decimal(0);
-  const activeAvgBuy = totalBoughtUsdt.gt(0)
-    ? totalBoughtVes.div(totalBoughtUsdt)
-    : new Decimal(0);
+  // Promedios ponderados limpios sin comisión ni truncado cuando hay órdenes crudas
+  const activeAvgSell = orderTotals
+    ? orderTotals.activeAvgSell
+    : totalSoldUsdt.gt(0)
+      ? totalSoldVes.div(totalSoldUsdt)
+      : new Decimal(0);
+  const activeAvgBuy = orderTotals
+    ? orderTotals.activeAvgBuy
+    : totalBoughtUsdt.gt(0)
+      ? totalBoughtVes.div(totalBoughtUsdt)
+      : new Decimal(0);
 
-  // Brecha efectiva ponderada por el volumen comprado diario (coherente con Σ Ganancia Bruta Día)
-  const brechaPoints = totalBoughtUsdt.gt(0)
-    ? grossProfitVes.div(totalBoughtUsdt)
+  const brechaDenom =
+    orderTotals && orderTotals.exactBoughtUsdtForAvg.gt(0)
+      ? orderTotals.exactBoughtUsdtForAvg
+      : totalBoughtUsdt;
+
+  const brechaPoints = brechaDenom.gt(0)
+    ? grossProfitVes.div(brechaDenom)
     : new Decimal(0);
   const spreadPct =
-    totalBoughtUsdt.gt(0) && activeAvgBuy.gt(0)
+    brechaDenom.gt(0) && activeAvgBuy.gt(0)
       ? brechaPoints.div(activeAvgBuy).mul(100)
       : new Decimal(0);
 

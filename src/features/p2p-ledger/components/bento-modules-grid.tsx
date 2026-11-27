@@ -624,14 +624,14 @@ export function BentoModulesGrid({
           </p>
         </div>
 
-        {/* KPI 4: Comisión por Volumen (Insignia Bronce / Plata / Oro) */}
+        {/* KPI 4: Comisión Real Binance (sumada de cada orden completada) */}
         <div className="rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-xs dark:border-[#2B3139] dark:bg-[#181A20]">
           <div className="flex items-center justify-between gap-2">
             <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-[#848E9C]">
-              Comisión {activeBadgeMeta.emoji} {activeBadgeMeta.label}
+              Comisión Binance {activeBadgeMeta.emoji}
             </span>
             <span className="rounded-full bg-amber-50 px-2 py-0.5 font-mono text-[10px] font-bold tabular-nums text-amber-800 dark:bg-[#FCD535]/15 dark:text-[#FCD535]">
-              {activeBadgeMeta.feeLabel} / vol
+              Real por orden
             </span>
           </div>
           <div className="mt-1.5 flex items-baseline gap-2">

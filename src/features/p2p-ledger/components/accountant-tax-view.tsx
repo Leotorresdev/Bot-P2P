@@ -26,6 +26,7 @@ import {
   getCurrentVetMonthIso,
 } from "@/lib/timezone-utc4";
 import {
+  formatBinanceAppOrderUsdt,
   formatDecimalWithCommas,
   formatUsdtAmount,
   formatVesAmount,
@@ -486,7 +487,7 @@ export function AccountantTaxView() {
                       {/* Tasa / Cantidad */}
                       <div className="col-span-2 flex flex-col gap-0.5 font-mono">
                         <span className="font-extrabold text-slate-900 dark:text-[#EAECEF]">
-                          {formatUsdtAmount(order.amountUsdt)}
+                          {formatBinanceAppOrderUsdt(order)}
                         </span>
                         <span className="text-[11px] text-slate-500 dark:text-[#848E9C]">
                           @ {formatDecimalWithCommas(order.unitPriceVes)} Bs/USDT

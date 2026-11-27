@@ -70,6 +70,45 @@ export function formatUsdtAmount(
   return `${formatDecimalWithCommas(rawValue, decimals)} USDT`;
 }
 
+/**
+ * Calcula el monto exacto en USDT tal como lo refleja la app móvil de Binance:
+ * - COMPRA (BUY):  amount - commission ("Cantidad recibida")
+ * - VENTA  (SELL): amount + commission ("Cantidad total")
+ *
+ * Conserva `order.amountUsdt` intacto como dato crudo de la API de Binance SAPI
+ * para idempotencia con cierres históricos y trazabilidad auditable.
+ */
+export function getBinanceAppOrderUsdtDecimal(order: {
+  readonly tradeType: "BUY" | "SELL";
+  readonly amountUsdt: string | number | undefined | null;
+  readonly commissionUsdt?: string | number | undefined | null;
+}): Decimal {
+  try {
+    const amt = new Decimal(sanitizeDecimalString(order.amountUsdt));
+    const comm = new Decimal(sanitizeDecimalString(order.commissionUsdt));
+    if (order.tradeType === "BUY") {
+      return Decimal.max(0, amt.minus(comm));
+    }
+    return amt.plus(comm);
+  } catch {
+    return new Decimal(0);
+  }
+}
+
+export function formatBinanceAppOrderUsdt(
+  order: {
+    readonly tradeType: "BUY" | "SELL";
+    readonly amountUsdt: string | number | undefined | null;
+    readonly commissionUsdt?: string | number | undefined | null;
+  },
+  decimals: number = 2
+): string {
+  return formatUsdtAmount(
+    getBinanceAppOrderUsdtDecimal(order).toFixed(),
+    decimals
+  );
+}
+
 export function getTradeTypeBadgeStyle(tradeType: "BUY" | "SELL"): {
   readonly label: "COMPRA" | "VENTA";
   readonly badgeClass: string;

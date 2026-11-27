@@ -24,24 +24,26 @@ El sistema resuelve cuatro grandes necesidades del ecosistema cripto-fiat venezo
 2. Moneda fiduciaria estrictamente **`VES`** (se descartan `USD`/Zinli, `COP`, etc.).
 3. Criptoactivo estrictamente **`USDT`** (se descartan compras/ventas de `BTC`, `ETH`, `BNB`, `USDC`, `FDUSD`, etc. aunque sean en `VES`).
 
-### B. Motor de Ganancias por "Vuelta" e Insignias de Comerciante (`calculateVueltaSummary`)
+### B. Motor de Ganancias por "Vuelta" y Comisiones Reales de Binance (`calculateVueltaSummary`)
 Todas las operaciones usan `Decimal.js` (precisión 28, redondeo `ROUND_HALF_UP`):
-- **Precios Promedio Ponderados Reales**:
-  - `activeAvgSell = totalSoldVes / totalSoldUsdt`
-  - `activeAvgBuy = totalBoughtVes / totalBoughtUsdt`
-- **Brecha de Puntos** (solo si ambos lados tienen volumen completado `> 0`):
+- **Volúmenes Visibles en USDT (Exactos a la App Móvil de Binance — `getBinanceAppOrderUsdtDecimal`)**:
+  - En **COMPRA (`BUY`)**: `amount - commission` (*Cantidad recibida* en Binance).
+  - En **VENTA (`SELL`)**: `amount + commission` (*Cantidad total* en Binance).
+  - En Supabase (`p2p_orders`) se conserva `amount_usdt` crudo y `commission_usdt` crudo sin mutar para auditoría e idempotencia.
+- **Precios Promedio Ponderados Limpios (SIN comisión y SIN truncado de 2 decimales de Binance)**:
+  - Peso exacto sin comisión por orden: `exactUsdtNoComm = totalPriceVes / unitPriceVes`
+  - `activeAvgSell = totalSoldVes / exactSoldUsdtForAvg`
+  - `activeAvgBuy = totalBoughtVes / exactBoughtUsdtForAvg`
+- **Brecha de Puntos Pura** (solo si ambos lados tienen volumen completado `> 0`):
   - `brechaPoints = activeAvgSell - activeAvgBuy`
 - **Volumen de la Vuelta y Pendiente**:
-  - `vueltaVolumeUsdt = min(totalSoldUsdt, totalBoughtUsdt)`
+  - `vueltaVolumeUsdt = min(totalSoldUsdt, totalBoughtUsdt)` (en USDT exactos de billetera/app Binance)
   - El diferencial (`|totalSoldUsdt - totalBoughtUsdt|`) queda como *Pendiente por recomprar* o *Pendiente por vender*.
-- **Ganancia Bruta**:
-  - `grossProfitBs = totalBoughtUsdt * brechaPoints`
+- **Ganancia Bruta Exacta**:
+  - `grossProfitBs = exactBoughtUsdtForAvg * brechaPoints`
   - `grossProfitUsdt = grossProfitBs / activeAvgBuy`
-- **Comisión por Insignia sobre el Volumen Total Movido** (`totalVolumeUsdt = totalSoldUsdt + totalBoughtUsdt`):
-  - **Bronce**: `0.20%` (`0.0020`)
-  - **Plata**: `0.175%` (`0.00175`)
-  - **Oro**: `0.125%` (`0.00125`)
-  - `volumeCommissionUsdt = totalVolumeUsdt * badgeFeeFactor`
+- **Comisión Real de Binance (restada UNA sola vez)**:
+  - `volumeCommissionUsdt = Σ commissionUsdt` (suma real exacta de las comisiones reportadas por Binance SAPI en cada orden completada `USDT/VES`; elimina desvíos por redondeos a centavos o cambios de insignia).
   - `volumeCommissionBs = volumeCommissionUsdt * (activeAvgBuy > 0 ? activeAvgBuy : activeAvgSell)`
 - **Ganancia Neta Real Operativa**:
   - `netProfitUsdt = grossProfitUsdt - volumeCommissionUsdt`

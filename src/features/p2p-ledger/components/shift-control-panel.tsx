@@ -34,6 +34,7 @@ import {
   type ShiftClosureDto,
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
 import {
+  formatBinanceAppOrderUsdt,
   formatDecimalWithCommas,
   formatUsdtAmount,
   formatVesAmount,
@@ -705,7 +706,7 @@ export function ShiftControlPanel({
                                       Bs
                                     </td>
                                     <td className="whitespace-nowrap px-3 py-2 text-right font-mono font-extrabold tabular-nums text-slate-900 dark:text-[#EAECEF]">
-                                      {formatUsdtAmount(order.amountUsdt)}
+                                      {formatBinanceAppOrderUsdt(order)}
                                     </td>
                                     <td className="whitespace-nowrap px-3 py-2 text-right font-mono font-extrabold tabular-nums text-slate-900 dark:text-[#FCD535]">
                                       {formatVesAmount(order.totalPriceVes)}

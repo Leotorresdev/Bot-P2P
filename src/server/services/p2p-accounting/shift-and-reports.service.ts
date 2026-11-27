@@ -601,10 +601,28 @@ export class P2PShiftAndReportsService {
         : getCurrentVetDateIso();
     const targetDateLabel = formatDateIsoVe(targetDateIso);
 
-    const [activeShift, todayShifts] = await Promise.all([
+    const [activeShift, rawTodayShifts, taxConfig] = await Promise.all([
       SupabaseVaultRepository.getActiveShift(userId),
       SupabaseVaultRepository.getShiftClosuresByDate(userId, targetDateIso),
+      SupabaseVaultRepository.getUserTaxConfig(userId),
     ]);
+
+    // Recalcular el resumen de cada jornada cerrada desde sus órdenes guardadas
+    // para que las jornadas previas reflejen inmediatamente la fórmula exacta vigente.
+    const todayShifts: ShiftClosureDto[] = rawTodayShifts.map((closure) => {
+      if (closure.orders.length === 0) return closure;
+      return {
+        ...closure,
+        summary: calculateVueltaSummary({
+          orders: closure.orders,
+          period: "TODAY",
+          periodLabel: closure.summary.periodLabel,
+          method: "FIFO",
+          badge: closure.merchantBadge,
+          seniatTaxPercent: taxConfig.seniatTaxPercent,
+        }),
+      };
+    });
 
     return {
       activeShift,

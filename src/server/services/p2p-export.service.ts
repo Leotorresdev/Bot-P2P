@@ -4,6 +4,7 @@ import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { MERCHANT_BADGE_META } from "@/features/p2p-ledger/schemas/p2p.schemas";
+import { getBinanceAppOrderUsdtDecimal } from "@/lib/format-currency";
 import {
   evaluateOrderCalculationEligibility,
   formatDecimalMoney,
@@ -561,7 +562,7 @@ export async function buildClosingWorkbookXlsx(
 
   for (const order of eligibleOrders) {
     const isBuy = order.tradeType === "BUY";
-    const amtDec = parseSafeDecimal(order.amountUsdt);
+    const amtDec = getBinanceAppOrderUsdtDecimal(order);
     const totalDec = parseSafeDecimal(order.totalPriceVes);
     const feeDec = parseSafeDecimal(order.commissionUsdt);
 
@@ -782,7 +783,7 @@ export async function buildClosingWorkbookXlsx(
       order.payMethodName,
       order.counterPartNickName,
       parseSafeDecimal(order.unitPriceVes).toNumber(),
-      parseSafeDecimal(order.amountUsdt).toNumber(),
+      getBinanceAppOrderUsdtDecimal(order).toNumber(),
       parseSafeDecimal(order.totalPriceVes).toNumber(),
       parseSafeDecimal(order.commissionUsdt).toNumber(),
     ];
@@ -1068,7 +1069,7 @@ export async function buildClosingPdfBytes(
             minimumFractionDigits: 2,
             maximumFractionDigits: 4,
           }),
-        o.amountUsdt,
+        getBinanceAppOrderUsdtDecimal(o).toFixed(2),
         formatDecimalMoney(parseSafeDecimal(o.totalPriceVes), 2),
       ];
     }),
@@ -1212,7 +1213,7 @@ export function buildClosingCsv(report: ClosingReportData): string {
         sanitizeCsvCell(o.payMethodName),
         sanitizeCsvCell(o.counterPartNickName),
         o.unitPriceVes,
-        o.amountUsdt,
+        getBinanceAppOrderUsdtDecimal(o).toFixed(2),
         o.totalPriceVes,
         o.commissionUsdt,
       ].join(",")

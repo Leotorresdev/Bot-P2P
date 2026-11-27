@@ -21,6 +21,7 @@ import type {
   TradeTypeFilter,
 } from "@/features/p2p-ledger/schemas/p2p.schemas";
 import {
+  formatBinanceAppOrderUsdt,
   formatDecimalWithCommas,
   formatUsdtAmount,
   formatVesAmount,
@@ -261,7 +262,7 @@ export function CompactOperationsPanel({
 
                   <div className="text-right font-mono tabular-nums">
                     <span className="text-xs font-extrabold text-slate-900 dark:text-[#EAECEF]">
-                      {formatUsdtAmount(order.amountUsdt)}
+                      {formatBinanceAppOrderUsdt(order)}
                     </span>
                     <span className="ml-1.5 text-[11px] font-bold text-slate-500 dark:text-[#848E9C]">
                       · {formatVesAmount(order.totalPriceVes)}
@@ -372,9 +373,20 @@ export function CompactOperationsPanel({
               </div>
 
               <div className="flex justify-between">
-                <span className="text-slate-500 dark:text-[#848E9C]">Cantidad Exacta USDT:</span>
+                <span className="text-slate-500 dark:text-[#848E9C]">
+                  {selectedOrder.tradeType === "BUY"
+                    ? "Cantidad Recibida (Binance):"
+                    : "Cantidad Total (Binance):"}
+                </span>
                 <span className="font-mono font-bold tabular-nums text-slate-900 dark:text-[#EAECEF]">
-                  {formatUsdtAmount(selectedOrder.amountUsdt)}
+                  {formatBinanceAppOrderUsdt(selectedOrder)}
+                </span>
+              </div>
+
+              <div className="flex justify-between">
+                <span className="text-slate-500 dark:text-[#848E9C]">Comisión Binance (Real):</span>
+                <span className="font-mono font-bold tabular-nums text-amber-600 dark:text-[#FCD535]">
+                  {formatUsdtAmount(selectedOrder.commissionUsdt)}
                 </span>
               </div>
 
