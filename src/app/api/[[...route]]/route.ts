@@ -1,7 +1,7 @@
 import { handle } from "hono/vercel";
 import { honoApp } from "@/server/hono/app";
 
-// Obligatorio para compatibilidad con Prisma ORM y node:crypto (AES-256-GCM)
+// Obligatorio para compatibilidad con node:crypto (AES-256-GCM / scrypt / HMAC-SHA256) y ExcelJS
 // Desactiva por completo el caché de producción en Next.js / Vercel y extiende maxDuration a 60s
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

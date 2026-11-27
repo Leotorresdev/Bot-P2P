@@ -1,7 +1,7 @@
 -- =========================================================================
 -- Esquema SQL Oficial — Bot P2P Venezuela (Supabase PostgreSQL)
 -- Copia y ejecuta este script en el "SQL Editor" de tu proyecto Supabase:
--- https://supabase.com/dashboard/project/knwgldaoewqljjcnsjrs/sql/new
+-- https://supabase.com/dashboard/project/[PROJECT-REF]/sql/new
 -- =========================================================================
 
 -- 1. Tabla de Operadores (Usuarios del Bot)
@@ -235,51 +235,42 @@ ALTER TABLE public.p2p_daily_total_closures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.p2p_sync_state ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.p2p_sync_day_coverage ENABLE ROW LEVEL SECURITY;
 
--- Políticas permisivas para la API Backend
+-- Políticas seguras: acceso cerrado a `anon` / `authenticated` (solo backend con `service_role`)
 DROP POLICY IF EXISTS "Allow Backend MVP Access Users" ON public.p2p_users;
-CREATE POLICY "Allow Backend MVP Access Users" ON public.p2p_users FOR ALL TO public USING (true) WITH CHECK (true);
-
 DROP POLICY IF EXISTS "Allow Backend MVP Access Credentials" ON public.api_credentials;
-CREATE POLICY "Allow Backend MVP Access Credentials" ON public.api_credentials FOR ALL TO public USING (true) WITH CHECK (true);
-
 DROP POLICY IF EXISTS "Allow Backend MVP Access Orders" ON public.p2p_orders;
-CREATE POLICY "Allow Backend MVP Access Orders" ON public.p2p_orders FOR ALL TO public USING (true) WITH CHECK (true);
-
 DROP POLICY IF EXISTS "Allow Backend MVP Access Closings" ON public.daily_closings;
-CREATE POLICY "Allow Backend MVP Access Closings" ON public.daily_closings FOR ALL TO public USING (true) WITH CHECK (true);
-
 DROP POLICY IF EXISTS "Allow Backend MVP Access TaxConfig" ON public.p2p_tax_config;
-CREATE POLICY "Allow Backend MVP Access TaxConfig" ON public.p2p_tax_config FOR ALL TO public USING (true) WITH CHECK (true);
-
 DROP POLICY IF EXISTS "Allow Backend MVP Access HourlyCandles" ON public.p2p_hourly_candles;
-CREATE POLICY "Allow Backend MVP Access HourlyCandles" ON public.p2p_hourly_candles FOR ALL TO public USING (true) WITH CHECK (true);
-
 DROP POLICY IF EXISTS "Allow Backend MVP Access ActiveShifts" ON public.p2p_active_shifts;
-CREATE POLICY "Allow Backend MVP Access ActiveShifts" ON public.p2p_active_shifts FOR ALL TO public USING (true) WITH CHECK (true);
-
 DROP POLICY IF EXISTS "Allow Backend MVP Access ShiftClosures" ON public.p2p_shift_closures;
-CREATE POLICY "Allow Backend MVP Access ShiftClosures" ON public.p2p_shift_closures FOR ALL TO public USING (true) WITH CHECK (true);
-
 DROP POLICY IF EXISTS "Allow Backend MVP Access DailyTotalClosures" ON public.p2p_daily_total_closures;
-CREATE POLICY "Allow Backend MVP Access DailyTotalClosures" ON public.p2p_daily_total_closures FOR ALL TO public USING (true) WITH CHECK (true);
-
 DROP POLICY IF EXISTS "Allow Backend MVP Access SyncState" ON public.p2p_sync_state;
-CREATE POLICY "Allow Backend MVP Access SyncState" ON public.p2p_sync_state FOR ALL TO public USING (true) WITH CHECK (true);
-
 DROP POLICY IF EXISTS "Allow Backend MVP Access SyncDayCoverage" ON public.p2p_sync_day_coverage;
-CREATE POLICY "Allow Backend MVP Access SyncDayCoverage" ON public.p2p_sync_day_coverage FOR ALL TO public USING (true) WITH CHECK (true);
 
-GRANT ALL ON TABLE public.p2p_users TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.api_credentials TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.p2p_orders TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.daily_closings TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.p2p_tax_config TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.p2p_hourly_candles TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.p2p_active_shifts TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.p2p_shift_closures TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.p2p_daily_total_closures TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.p2p_sync_state TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.p2p_sync_day_coverage TO anon, authenticated, service_role;
+REVOKE ALL ON TABLE public.p2p_users FROM anon, authenticated;
+REVOKE ALL ON TABLE public.api_credentials FROM anon, authenticated;
+REVOKE ALL ON TABLE public.p2p_orders FROM anon, authenticated;
+REVOKE ALL ON TABLE public.daily_closings FROM anon, authenticated;
+REVOKE ALL ON TABLE public.p2p_tax_config FROM anon, authenticated;
+REVOKE ALL ON TABLE public.p2p_hourly_candles FROM anon, authenticated;
+REVOKE ALL ON TABLE public.p2p_active_shifts FROM anon, authenticated;
+REVOKE ALL ON TABLE public.p2p_shift_closures FROM anon, authenticated;
+REVOKE ALL ON TABLE public.p2p_daily_total_closures FROM anon, authenticated;
+REVOKE ALL ON TABLE public.p2p_sync_state FROM anon, authenticated;
+REVOKE ALL ON TABLE public.p2p_sync_day_coverage FROM anon, authenticated;
+
+GRANT ALL ON TABLE public.p2p_users TO service_role;
+GRANT ALL ON TABLE public.api_credentials TO service_role;
+GRANT ALL ON TABLE public.p2p_orders TO service_role;
+GRANT ALL ON TABLE public.daily_closings TO service_role;
+GRANT ALL ON TABLE public.p2p_tax_config TO service_role;
+GRANT ALL ON TABLE public.p2p_hourly_candles TO service_role;
+GRANT ALL ON TABLE public.p2p_active_shifts TO service_role;
+GRANT ALL ON TABLE public.p2p_shift_closures TO service_role;
+GRANT ALL ON TABLE public.p2p_daily_total_closures TO service_role;
+GRANT ALL ON TABLE public.p2p_sync_state TO service_role;
+GRANT ALL ON TABLE public.p2p_sync_day_coverage TO service_role;
 
 -- 8. Recolección 24/7 Automática en la Nube (Opcional con pg_cron + pg_net en Supabase)
 -- Activa las extensiones pg_cron y pg_net en Dashboard -> Database -> Extensions y ejecuta:
@@ -288,27 +279,3 @@ GRANT ALL ON TABLE public.p2p_sync_day_coverage TO anon, authenticated, service_
 --   '*/5 * * * *',
 --   $$ SELECT net.http_get(url := 'https://bot-p2-p.vercel.app/api/p2p/collect-candles'); $$
 -- );
-
--- 9. Insertar tu cuenta registrada para que puedas iniciar sesión de inmediato
-INSERT INTO public.p2p_users (
-  id,
-  email,
-  full_name,
-  password_hash,
-  password_salt,
-  totp_secret,
-  role,
-  created_at
-) VALUES (
-  'usr_d4e833cc-84c',
-  'leofersontp0912@gmail.com',
-  'leoferson torres',
-  '31c26b97f3e5a6fa583db4bd9708d0048b4a50df651d3aae1c4fdbcf356c438345357a663916ea1f29fbf367d39d193a8daa62d2fac492aba60302ba002d29cc',
-  'a9a48a69e269e9f2c31039079f5e66b3',
-  'LV2X56HYBEHVIWNI',
-  'OPERATOR',
-  NOW()
-) ON CONFLICT (email) DO UPDATE SET
-  password_hash = EXCLUDED.password_hash,
-  password_salt = EXCLUDED.password_salt,
-  totp_secret = EXCLUDED.totp_secret;

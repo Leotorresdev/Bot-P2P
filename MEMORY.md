@@ -41,6 +41,12 @@
    - *Prevención*: Migración idempotente a `PRIMARY KEY (user_id, order_number)` en `supabase/schema.sql` con `onConflict: "user_id,order_number"` y *fallback* seguro.
 6. **`src/app/manifest.ts` fallando build trace (`.nft.json`) en Next.js 15**:
    - *Prevención*: Usar `public/manifest.webmanifest` estático + `metadata.manifest` + cabeceras en `next.config.ts`.
+7. **Cantidades de más / deriva en promedios ponderados (`Prom. Compra` y `Prom. Venta`)**:
+   - *Causa*: (a) `calculateVueltaSummary`, `mapRawItemsToStoredRecords` y `saveUserOrders` no deduplicaban por `orderNumber` ante desplazamientos de paginación en Binance o solapamientos de turnos; (b) `buildAggregatedSummaryFromClosures` sumaba totales diarios ya redondeados a 2 decimales en lugar de sumar las órdenes exactas deduplicadas; (c) `supabase-vault.repository.ts` evaluaba `"0" ?? unpacked.totalPriceVes` como `"0"` cuando Postgres tenía `DEFAULT '0'`.
+   - *Prevención*: Deduplicación estricta por `orderNumber` en toda la cadena (`mapRawItemsToStoredRecords`, `saveUserOrders`, `calculateWeightedOrderTotals`), `buildAggregatedSummaryFromClosures` calcula `Σ Bs ÷ Σ USDT` directo desde las órdenes deduplicadas (manteniendo ganancia diaria sumada día por día), y `resolvePositiveTotalPriceVes` ignora ceros legacy. Cubierto por suite `npm test` (`tests/p2p-accounting.test.ts`).
+8. **Modularización de servicios monolíticos**:
+   - `src/server/db/supabase-vault.repository.ts` (2,335 líneas → fachada ~225 líneas sobre `src/server/db/vault/*`: `vault.types.ts`, `vault-local-store.ts`, `users-credentials.repository.ts`, `orders-sync.repository.ts`, `tax-badge.repository.ts`, `shifts-closings.repository.ts`).
+   - `src/server/services/p2p-accounting.service.ts` (2,847 líneas → fachada ~225 líneas sobre `src/server/services/p2p-accounting/*`: `decimal-utils.ts`, `order-eligibility.ts`, `vuelta-calculator.ts`, `binance-c2c-client.ts`, `sync-orchestrator.service.ts`, `shift-and-reports.service.ts`).
 
 ---
 

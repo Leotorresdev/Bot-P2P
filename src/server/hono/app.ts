@@ -7,7 +7,6 @@ import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { zValidator } from "@hono/zod-validator";
 import crypto from "node:crypto";
 import { env } from "@/env";
-import { auth } from "@/server/auth/better-auth";
 import {
   ExportClosingQuerySchema,
   GetBanksQuerySchema,
@@ -38,6 +37,10 @@ import {
   verifySignedSessionToken,
   verifyTotpCode,
 } from "@/server/security/crypto-vault";
+import {
+  isAllowedOrigin as checkAllowedOrigin,
+  isAuthorizedCronRequest,
+} from "@/server/security/security-policy";
 import { SupabaseVaultRepository } from "@/server/db/supabase-vault.repository";
 import { P2PAccountingService } from "@/server/services/p2p-accounting.service";
 import {
@@ -75,28 +78,15 @@ const loginBruteForceStore = new Map<
 const baseApp = new Hono<HonoEnv>().basePath("/api");
 
 function isAllowedOrigin(origin: string, requestUrl?: string): boolean {
-  if (!origin) return true;
-  if (origin === env.BETTER_AUTH_URL) return true;
-  if (
-    origin === "http://localhost:3000" ||
-    origin === "http://127.0.0.1:3000" ||
-    origin.startsWith("http://localhost:") ||
-    origin.startsWith("http://127.0.0.1:")
-  ) {
-    return true;
-  }
-  if (origin.endsWith(".vercel.app")) {
-    return true;
-  }
-  if (requestUrl) {
-    try {
-      const reqOrigin = new URL(requestUrl).origin;
-      if (origin === reqOrigin) return true;
-    } catch {
-      // ignore invalid URL
-    }
-  }
-  return false;
+  return checkAllowedOrigin(origin, {
+    appUrl: env.BETTER_AUTH_URL,
+    publicAppUrl: process.env.NEXT_PUBLIC_APP_URL,
+    vercelProductionUrl: process.env.VERCEL_PROJECT_PRODUCTION_URL,
+    vercelUrl: process.env.VERCEL_URL,
+    extraAllowedOrigins: env.ALLOWED_ORIGINS,
+    requestUrl,
+    nodeEnv: env.NODE_ENV,
+  });
 }
 
 // 1. Middlewares Globales de Endurecimiento (OWASP) + Paridad Localhost/Vercel
@@ -239,12 +229,7 @@ baseApp.onError((err, c) => {
   );
 });
 
-// 4. Montaje de Rutas de Better Auth (`/api/auth/*`)
-baseApp.on(["GET", "POST"], "/auth/**", (c) => {
-  return auth.handler(c.req.raw);
-});
-
-// 5. Rutas Encadenadas de Hono RPC (`export type AppType = typeof routes`)
+// 4. Rutas Encadenadas de Hono RPC (`export type AppType = typeof routes`)
 export const routes = baseApp
   .post(
     "/p2p/register",
@@ -914,6 +899,13 @@ export const routes = baseApp
     );
   })
   .get("/p2p/cron-daily-close", async (c) => {
+    const authHeader = c.req.header("authorization");
+    if (!isAuthorizedCronRequest(authHeader, env.CRON_SECRET)) {
+      return c.json(
+        { error: "No autorizado: se requiere CRON_SECRET válido." },
+        401
+      );
+    }
     const result = await P2PAccountingService.runCronDailyCloseAllUsers();
     return c.json({ data: result }, 200);
   });

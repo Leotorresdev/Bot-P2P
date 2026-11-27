@@ -1,43 +1,17 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { verifySessionTokenEdge } from "@/server/security/security-policy";
 
 const SESSION_COOKIE_NAME = "bot_p2p_session";
 
-function decodeBase64UrlToUtf8(input: string): string {
-  const base64 = input.replace(/-/g, "+").replace(/_/g, "/");
-  const padLength = (4 - (base64.length % 4)) % 4;
-  const padded = base64 + "=".repeat(padLength);
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return new TextDecoder("utf-8").decode(bytes);
-}
-
-function isSessionStructureValid(token: string | undefined): boolean {
-  if (!token || !token.includes(".")) return false;
-  const parts = token.split(".");
-  const dataB64 = parts[0];
-  const sig = parts[1];
-  if (!dataB64 || !sig || sig.length < 16) return false;
-
-  try {
-    const jsonStr = decodeBase64UrlToUtf8(dataB64);
-    const payload = JSON.parse(jsonStr) as { userId?: string; exp?: number };
-    if (!payload.userId || !payload.exp) return false;
-    if (Date.now() > payload.exp) return false;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const sessionToken = request.cookies.get(SESSION_COOKIE_NAME)?.value;
-  const isAuthenticated = isSessionStructureValid(sessionToken);
+  const isAuthenticated = await verifySessionTokenEdge(
+    sessionToken,
+    process.env.BETTER_AUTH_SECRET
+  );
 
-  // 1. Proteger la ruta principal "/" -> Redirigir a "/login" si no hay sesión activa
+  // 1. Proteger la ruta principal "/" -> Redirigir a "/login" si no hay sesión firmada válida
   if (pathname === "/" && !isAuthenticated) {
     const loginUrl = new URL("/login", request.url);
     return NextResponse.redirect(loginUrl);

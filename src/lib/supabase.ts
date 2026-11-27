@@ -1,15 +1,25 @@
+import "server-only";
 import { createClient } from "@supabase/supabase-js";
+import { env } from "@/env";
 
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL ??
-  "https://knwgldaoewqljjcnsjrs.supabase.co";
-const supabaseAnonKey =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
-  "sb_publishable_atUc71tYjYWvT2tOSc18HQ_3bt2ypo2";
+const supabaseKey =
+  env.SUPABASE_SERVICE_ROLE_KEY ?? env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+if (!env.SUPABASE_SERVICE_ROLE_KEY) {
+  console.warn(
+    "⚠️ [Supabase] SUPABASE_SERVICE_ROLE_KEY no está configurada. " +
+      "Configúrala en .env y Vercel antes de cerrar las políticas RLS para 'anon'."
+  );
+}
+
+/**
+ * Cliente privilegiado de Supabase exclusivamente para el servidor (`server-only`).
+ * Usa `SUPABASE_SERVICE_ROLE_KEY` para operar detrás de Hono con RLS cerrado a `anon`.
+ */
+export const supabase = createClient(env.NEXT_PUBLIC_SUPABASE_URL, supabaseKey, {
   auth: {
     persistSession: false,
+    autoRefreshToken: false,
   },
   global: {
     fetch: (url, options = {}) => {

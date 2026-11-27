@@ -103,7 +103,8 @@ Todas las operaciones usan `Decimal.js` (precisión 28, redondeo `ROUND_HALF_UP`
 
 1. **Regla de Verificación Punta a Punta (Obligatoria)**:
    - Antes de afirmar cómo se comporta una función o cerrar un bug, trazar **toda la cadena**: `Binance SAPI → Supabase (incluyendo defaults/fallbacks legacy) → Servicio → Exportación/UI`.
-   - Toda modificación debe validarse con `npx tsc --noEmit`, `npm run build` y pruebas funcionales/unitarias cuando toque lógica financiera, auth o exportaciones.
+   - Toda modificación debe validarse con `npm test`, `npx tsc --noEmit`, `npm run build` y pruebas unitarias en `tests/` cuando toque lógica financiera, auth o exportaciones.
+   - Arquitectura modular del núcleo: los dominios viven en `src/server/db/vault/*` y `src/server/services/p2p-accounting/*`, expuestos mediante fachadas compatibles en `supabase-vault.repository.ts` y `p2p-accounting.service.ts`.
 2. **Regla de Oro — No Alterar Fórmulas Sin Aprobación Explícita**:
    - No modificar fórmulas de Vuelta, promedios ponderados, comisiones por insignia ni SENIAT salvo solicitud explícita del dueño.
 3. **Precisión Financiera Obligatoria**:
